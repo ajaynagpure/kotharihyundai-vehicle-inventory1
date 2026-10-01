@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kothari Hyundai - Vehicle Inventory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    .password-field{position:relative;display:flex;align-items:center}
+    .password-field input{width:100%;padding-right:44px}
+    .password-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;padding:7px;font-size:17px;line-height:1;opacity:.75}
+    .password-eye:hover{opacity:1}
+    .link-btn{border:0;background:none;padding:10px 0;color:#1d4ed8;cursor:pointer;font:inherit}
+    .link-btn:hover{text-decoration:underline}
+    .message.success{color:#15803d}
+    .message.error{color:#b91c1c}
+    .table-password{min-width:150px}.table-password input{background:#fff;border:1px solid #d1d5db;border-radius:7px;padding:6px 34px 6px 8px;font-size:12px}.table-password .password-eye{right:2px;padding:5px;font-size:14px}
+  </style>
+</head>
+<body>
+  <div id="loginView" class="login-view">
+    <div class="login-card">
+      <div class="brand-mark">H</div>
+      <h1>KOTHARI HYUNDAI</h1>
+      <p>Vehicle Inventory Management System</p>
+      <form id="loginForm">
+        <label>Username</label>
+        <input id="username" type="text" placeholder="Enter username" autocomplete="username" required>
+        <label>Password</label>
+        <div class="password-field"><input id="password" type="password" placeholder="Enter password" autocomplete="current-password" required><button type="button" class="password-eye" data-password-toggle="password" aria-label="Show password" title="Show password">👁</button></div>
+        <button class="primary-btn" type="submit">Login</button>
+      </form>
+      <div id="loginMessage" class="message"></div>
+      <small>Authorized users only</small>
+    </div>
+  </div>
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <div class="brand-mark small">H</div>
+        <div><strong>KOTHARI HYUNDAI</strong><span>Vehicle Inventory</span></div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="side-footer">
+        <span id="connectionDot" class="dot offline"></span>
+        <span id="connectionText">Not connected</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="mobileMenu" class="icon-btn">☰</button>
+        <div class="top-title">
+          <h2 id="pageTitle">Dashboard</h2>
+          <p id="pageSubtitle">Kothari Hyundai • Live Vehicle Inventory</p>
+        </div>
+        <form id="globalSearch" class="top-search" role="search">
+          <input id="globalVin" type="search" placeholder="Search VIN / last 6 digits" autocomplete="off" aria-label="Search VIN">
+          <button type="submit" aria-label="Search">⌕</button>
+        </form>
+        <div class="top-actions">
+          <button id="refreshBtn" class="secondary-btn">↻ Refresh</button>
+          <button id="profileBtn" class="profile-btn" type="button" title="Profile" aria-label="Profile">👤</button>
+          <div class="user-chip"><span id="userName">User</span><button id="logoutBtn">Logout</button></div>
+        </div>
+      </header>
+
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/fields.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/computed.js"></script>
+  <script src="js/gate.js"></script>
+  <script src="js/gate-bulk.js"></script>
+  <script src="js/gate-in.js"></script>
+  <script src="js/docs.js"></script>
+  <script src="js/inventory.js"></script>
+  <script src="js/import.js"></script>
+  <script src="js/delivery.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/admin-tools.js"></script>
+</body>
+</html>

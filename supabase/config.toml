@@ -1,0 +1,11 @@
+[functions.send-reset-otp]
+verify_jwt = false
+
+[functions.reset-password-with-otp]
+verify_jwt = false
+
+[functions.create-user]
+verify_jwt = true
+
+[functions.delete-user]
+verify_jwt = true
