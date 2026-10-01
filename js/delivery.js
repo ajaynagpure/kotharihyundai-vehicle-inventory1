@@ -193,7 +193,7 @@ async function delEdit(id){
 }
 async function delDelete(id){
   const v = DEL.rows.find(x => String(x.id) === String(id)); if(!v) return;
-  const back = (!isBlank(v.bill_no) || !isBlank(v.sales_imported_at)) ? "Bill / Not Delivered" : v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";
+  const back = (!isBlank(v.bill_no) || !isBlank(v.sales_imported_at)) ? "Tally Done" : v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";
   if(!confirm(`Delete the delivery entry of ${v.vin}?\n\nThe vehicle goes back to "${back}". The vehicle record itself is kept.`)) return;
   const sb = state.supabase; importDropped.clear();
   const d = await sb.from("deliveries").delete().eq("vehicle_id", v.id).select("vehicle_id");

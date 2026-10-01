@@ -196,7 +196,7 @@ async function loadPage(page) {
 function renderDashboard(){
   $("content").innerHTML=`
   <div class="cards">
-    ${["Total Stock","Available Stock","In Transit","Pending Order","Bill / Not Delivered","Delivered"].map((x,i)=>`
+    ${["Total Stock","Free Stock","In Transit","Pending Order","Tally Done","Delivered"].map((x,i)=>`
       <div class="stat-card"><div class="stat-title">${x}</div><div class="stat-value" id="stat${i}">0</div><div class="stat-note">Live Supabase data</div></div>`).join("")}
   </div>
   <div class="grid-2">

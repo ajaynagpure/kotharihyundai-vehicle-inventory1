@@ -5,23 +5,23 @@
 
 const col = (h, k, t = "text") => ({h, k, t});
 
-const STOCK_COLS = [col("Total Vehicles","vehicle_count","num"), col("Available Stock","stock_count","num"), col("In Transit","in_transit_count","num"), col("Pending Order","pending_count","num"), col("Sales / Not Delivered","bill_count","num"), col("Available Value","stock_value","money"), col("In Transit Value","in_transit_value","money")];
+const STOCK_COLS = [col("Total Vehicles","vehicle_count","num"), col("Free Stock","stock_count","num"), col("In Transit","in_transit_count","num"), col("Pending Order","pending_count","num"), col("Tally Done","bill_count","num"), col("Free Value","stock_value","money"), col("In Transit Value","in_transit_value","money")];
 const REPORTS = {
-  "location-report": {title:"Location wise Stock", source:"location_stock_report", totals:true, sort:["vehicle_count","desc"],
-    cols:[col("Location","location_name"), ...STOCK_COLS]},
-  "model-report": {title:"Model Stock", source:"model_stock_report", totals:true, sort:["vehicle_count","desc"],
+  "location-report": {title:"Location wise Stock", source:"location_stock_report", totals:true, sort:["stock_count","desc"], dim:"location",
+    cols:[col("Location","location_name"), col("Free Stock","stock_count","num"), col("Tally Done","bill_count","num"), col("Free + Tally Done Value","total_value","money"), col("Delivered","delivered_count","num"), col("Delivered Purchase Value","delivered_value","money")]},
+  "model-report": {title:"Model Stock", source:"model_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"model",
     cols:[col("Model","model"), ...STOCK_COLS]},
-  "finance-report": {title:"Finance wise Available Stock", source:"finance_stock_report", totals:true, sort:["vehicle_count","desc"],
+  "finance-report": {title:"Finance wise Free Stock", source:"finance_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"finance",
     cols:[col("Financier Name","finance_company"), ...STOCK_COLS]},
-  "dealer-report": {title:"Dealer Code wise Available Stock", source:"dealer_code_stock_report", totals:true, sort:["vehicle_count","desc"],
+  "dealer-report": {title:"Dealer Code wise Free Stock", source:"dealer_code_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"dealer",
     cols:[col("Dealer","dealer_code"), ...STOCK_COLS]},
-  "aging-report": {title:"Aging Report", source:"aging_report", sort:["aging_days","desc"],
+  "aging-report": {editable:true, title:"Aging Report", source:"aging_report", sort:["aging_days","desc"],
     cols:[col("VIN No.","vin"), col("Model","model"), col("Status","status"), col("Purchase Date","purchase_date","date"), col("Aging Days","aging_days","num"), col("Bucket","aging_bucket")]},
-  "delivery-report": {title:"Delivery Report", source:"delivery_report", sort:["delivery_date","desc"],
+  "delivery-report": {editable:true, title:"Delivery Report", source:"delivery_report", sort:["delivery_date","desc"],
     cols:[col("Delivery No","delivery_no"), col("Date","delivery_date","date"), col("VIN","vin"), col("Model","model"), col("Customer","customer_name"), col("Finance","finance_company")]},
-  "pending-report": {title:"Pending Order Report", source:"pending_order_report", sort:["order_date","desc"],
+  "pending-report": {editable:true, title:"Pending Order Report", source:"pending_order_report", sort:["order_date","desc"],
     cols:[col("Order No","order_no"), col("Order Date","order_date","date"), col("PIS No","pis_no"), col("Model","model"), col("Variant","variant"), col("Color","color"), col("Qty","quantity","num"), col("Status","status")]},
-  "transit-report": {title:"In Transit Report", source:"in_transit_report",
+  "transit-report": {editable:true, title:"In Transit Report", source:"in_transit_report",
     cols:[col("Order No","order_no"), col("VIN No.","vin"), col("Engine No","engine_no"), col("Model","model"), col("Variant","variant"), col("Color","color"), col("Dealer","dealer_code"), col("Financier Name","finance_company"), col("HMI Invoice Date","hmi_invoice_date","date"), col("HMI Invoice No","hmi_invoice_no"), col("HMI Invoice Amount","hmi_invoice_amount","money")]},
   "gate-report": {title:"Gate Movement Report", source:"gate_movement_report", sort:["movement_time","desc"],
     cols:[col("Date","movement_time","datetime"), col("Type","movement_type"), col("VIN","vin"), col("From","from_location"), col("To","to_location"), col("Gate","gate_name")]}
@@ -29,7 +29,7 @@ const REPORTS = {
 
 /* ---------------------------------------------------------------- Dashboard */
 const vAmt = v => vValue(v) || Number(v.order_amount || 0);            // Pending Order rows carry the order amount
-const STAGES = [["stock","Available Stock"],["transit","In Transit"],["pending","Pending Order"],["bill","Sales / Not Delivered"],["delivered","Delivered"]];
+const STAGES = [["stock","Free Stock"],["transit","In Transit"],["pending","Pending Order"],["bill","Tally Done"],["delivered","Delivered"]];
 const emptyStageSet = () => ({stock:0, transit:0, pending:0, bill:0, delivered:0, total:0});
 function stageGroup(all, keyOf){          // per key: n = counts, v = values, split by stage
   const m = new Map();
@@ -40,7 +40,7 @@ function stageGroup(all, keyOf){          // per key: n = counts, v = values, sp
 const DIMS = {
   finance:{label:"Financier", of:v => v.finance_company || "Not Financed"},
   dealer:{label:"Dealer", of:v => v.dealer_code || "Not Available"},
-  location:{label:"Location", of:v => v.location_id ? locName(v.location_id) : "Not Assigned"},
+  location:{label:"Location", of:v => vLocName(v)},
   model:{label:"Model", of:v => v.model || "Not Available"},
   status:{label:"Status", of:v => v.status || "UNKNOWN"}
 };
@@ -49,23 +49,23 @@ const dimNum = (n, dim, key, stage) => n ? raw(`<button type="button" class="lin
 const B = t => raw(`<b>${esc(String(t))}</b>`), N = t => B(Number(t).toLocaleString("en-IN")), MS = t => B(moneyShort(t));
 
 function renderDashboard(){
-  const stats = [["Total Order Stock","stat0","total"],["Available Stock","stat1","stock"],["In Transit","stat2","transit"],["Pending Order","stat3","pending"],["Sales / Not Delivered","stat4","bill"],["Delivered","stat5","delivered"]];
+  const stats = [["Total Order Stock","stat0","total"],["Free Stock","stat1","stock"],["In Transit","stat2","transit"],["Pending Order","stat3","pending"],["Tally Done","stat4","bill"],["Delivered","stat5","delivered"]];
   const link = (page, label) => `<button class="secondary-btn" type="button" onclick="navigate('${page}')" ${can(page) ? "" : "hidden"}>${label}</button>`;
   $("content").innerHTML = `
   <div class="cards dashboard-cards">
     ${stats.map(([x,id,kind]) => `<button type="button" class="stat-card stat-card-button" data-stat="${kind}" title="Click to view vehicles"><div class="stat-title">${x}</div><div class="stat-value" id="${id}">0</div><div class="stat-money" id="${id}v">₹ 0</div><div class="stat-note">Click to view list ›</div></button>`).join("")}
   </div>
   <div class="grid-2">
-    <div class="panel"><div class="panel-head"><h3>Finance wise available stock</h3>${link("finance-report","View Report")}</div><div id="financeDash" class="table-wrap">${emptyState("Loading...")}</div></div>
-    <div class="panel"><div class="panel-head"><h3>Dealer code wise available stock</h3>${link("dealer-report","View Report")}</div><div id="dealerDash" class="table-wrap">${emptyState("Loading...")}</div></div>
+    <div class="panel"><div class="panel-head"><h3>Finance wise free stock</h3>${link("finance-report","View Report")}</div><div id="financeDash" class="table-wrap">${emptyState("Loading...")}</div></div>
+    <div class="panel"><div class="panel-head"><h3>Dealer code wise free stock</h3>${link("dealer-report","View Report")}</div><div id="dealerDash" class="table-wrap">${emptyState("Loading...")}</div></div>
   </div>
   <div class="grid-2">
     <div class="panel"><div class="panel-head"><h3>Status wise stock</h3>${link("status","Open")}</div><div id="statusDash" class="pie-wrap">${emptyState("Loading...")}</div></div>
     <div class="panel"><div class="panel-head"><h3>Recent Vehicle Movements</h3>${link("gate-report","View All")}</div><div id="gateTable" class="table-wrap">${emptyState("Loading...")}</div></div>
   </div>
   <div class="panel"><div class="panel-head"><h3>Location wise stock</h3>${link("location-report","View Report")}</div><div id="locationTable" class="table-wrap">${emptyState("Loading...")}</div></div>
-  <div class="panel"><div class="panel-head"><h3>Stock Ageing — Available Stock</h3>${link("aging-report","View Report")}</div><p id="ageNote" class="form-help"></p><div id="ageDash" class="age-cards">${emptyState("Loading...")}</div></div>
-  <div class="panel"><div class="panel-head"><h3>Model wise available stock &amp; ageing</h3>${link("model-report","View Report")}</div><div id="modelDash" class="table-wrap">${emptyState("Loading...")}</div></div>`;
+  <div class="panel"><div class="panel-head"><h3>Stock Ageing — Free Stock</h3>${link("aging-report","View Report")}</div><p id="ageNote" class="form-help"></p><div id="ageDash" class="age-cards">${emptyState("Loading...")}</div></div>
+  <div class="panel"><div class="panel-head"><h3>Model wise free stock &amp; ageing</h3>${link("model-report","View Report")}</div><div id="modelDash" class="table-wrap">${emptyState("Loading...")}</div></div>`;
   document.querySelectorAll(".stat-card-button").forEach(b => b.addEventListener("click", () => openStatModal(b.dataset.stat)));
   if(state.supabase) return loadDashboardData();
 }
@@ -106,45 +106,46 @@ async function loadDashboardData(){
       el.innerHTML = groups.length ? table(headers, groups.map(mapper), footer(groups)) : emptyState("No records found."); bindDim(el); };
     const tot = (gs, set, k) => gs.reduce((t, g) => t + g[set][k], 0);
 
-    // 6. Finance wise available stock: count + short value
+    // 6. Finance wise free stock: count + short value
     const fin = stageGroup(all, DIMS.finance.of).filter(g => g.n.stock).sort((a,b) => b.n.stock - a.n.stock);
-    draw("financeDash", ["Financier Name","Available Stock","Value"], fin, g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock)],
+    draw("financeDash", ["Financier Name","Free Stock","Value"], fin, g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock)],
       gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock"))]);
     // 7. Dealer code wise: available, in transit, bill / not delivered (count + short value)
     const dea = stageGroup(all, DIMS.dealer.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => b.n.stock - a.n.stock || b.n.transit - a.n.transit);
-    draw("dealerDash", ["Dealer","Available","Value","In Transit","Value","Sales / Not Delivered","Value"], dea,
+    draw("dealerDash", ["Dealer","Free Stock","Value","In Transit","Value","Tally Done","Value"], dea,
       g => [g.key, dimNum(g.n.stock,"dealer",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"dealer",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"dealer",g.key,"bill"), moneyShort(g.v.bill)],
       gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill"))]);
-    // 9. Location wise stock: available, bill / not delivered, delivered (count + short value)
+    // 9. Location wise stock: Free Stock + Tally Done counts, their combined value, Delivered count + purchase value
     const loc = stageGroup(all, DIMS.location.of).filter(g => g.n.stock + g.n.bill + g.n.delivered).sort((a,b) => b.n.stock - a.n.stock);
-    draw("locationTable", ["Location","Available Stock","Value","Sales / Not Delivered","Value","Delivered","Value"], loc,
-      g => [g.key, dimNum(g.n.stock,"location",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.bill,"location",g.key,"bill"), moneyShort(g.v.bill), dimNum(g.n.delivered,"location",g.key,"delivered"), moneyShort(g.v.delivered)],
-      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(tot(gs,"n","delivered")), MS(tot(gs,"v","delivered"))]);
+    const lv = g => g.v.stock + g.v.bill;
+    draw("locationTable", ["Location","Free Stock","Tally Done","Free + Tally Done Value","Delivered","Delivered Purchase Value"], loc,
+      g => [g.key, dimNum(g.n.stock,"location",g.key,"stock"), dimNum(g.n.bill,"location",g.key,"bill"), moneyShort(lv(g)), dimNum(g.n.delivered,"location",g.key,"delivered"), moneyShort(g.v.delivered)],
+      gs => [B("Total"), N(tot(gs,"n","stock")), N(tot(gs,"n","bill")), MS(gs.reduce((t,g) => t + lv(g), 0)), N(tot(gs,"n","delivered")), MS(tot(gs,"v","delivered"))]);
 
     // 8. Status wise stock: pie chart
     const st = {}; all.forEach(v => { const k = v.status || "UNKNOWN"; (st[k] ??= {status:k, count:0, value:0}); st[k].count++; st[k].value += vAmt(v); });
     if(box("statusDash")){ box("statusDash").innerHTML = pieHtml(Object.values(st).sort((a,b) => b.count - a.count)); bindDim(box("statusDash")); }
 
-    // Ageing = Available Stock only (In Transit, Sales / Not Delivered, Pending Order and Delivered are not aged)
+    // Ageing = Free Stock only (In Transit, Tally Done, Pending Order and Delivered are not aged)
     const ageRows = ageInfo(all), names = ageBucketNames(), buckets = [...names, ...(ageRows.some(a => a.b === AGE_NODATE) ? [AGE_NODATE] : [])];
     const nf = x => Number(x).toLocaleString("en-IN");
-    if(box("ageNote")) box("ageNote").textContent = `Ageing is calculated on Available Stock only: ${nf(ageRows.length)} vehicles.`;
+    if(box("ageNote")) box("ageNote").textContent = `Ageing is calculated on Free Stock only: ${nf(ageRows.length)} vehicles.`;
     if(box("ageDash")){
       box("ageDash").innerHTML = ageRows.length ? buckets.map(bk => { const l = ageRows.filter(a => a.b === bk);
         return `<button type="button" class="stat-card stat-card-button age-card" data-age-b="${esc(bk)}"><div class="stat-title">${esc(bk)}</div><div class="stat-value">${l.length.toLocaleString("en-IN")}</div><div class="stat-note">${moneyShort(l.reduce((t,a) => t + vAmt(a.v), 0))}</div></button>`; }).join("")
-        + `<div class="stat-card age-card age-total"><div class="stat-title">Total Available Stock</div><div class="stat-value">${ageRows.length.toLocaleString("en-IN")}</div><div class="stat-note">${moneyShort(ageRows.reduce((t,a) => t + vAmt(a.v), 0))}</div></div>`
-        : emptyState("No available stock yet. Vehicles appear here after Bhilarwadi / Branch IN.");
+        + `<div class="stat-card age-card age-total"><div class="stat-title">Total Free Stock</div><div class="stat-value">${ageRows.length.toLocaleString("en-IN")}</div><div class="stat-note">${moneyShort(ageRows.reduce((t,a) => t + vAmt(a.v), 0))}</div></div>`
+        : emptyState("No free stock yet. Vehicles appear here after Bhilarwadi / Branch IN.");
       box("ageDash").querySelectorAll("[data-age-b]").forEach(b => b.addEventListener("click", () => openAgeModal(null, b.dataset.ageB)));
     }
-    // Model wise available stock (Sales / Not Delivered, Delivered, Pending and In Transit are excluded) with ageing count + value
+    // Model wise free stock (Tally Done, Delivered, Pending and In Transit are excluded) with ageing count + value
     const ageBy = {}; ageRows.forEach(a => { const m = DIMS.model.of(a.v), o = ((ageBy[m] ??= {})[a.b] ??= {n:0, v:0}); o.n++; o.v += vAmt(a.v); });
     const mod = stageGroup(all, DIMS.model.of).filter(g => g.n.stock).sort((a,b) => b.n.stock - a.n.stock);
     if(box("modelDash")){
       const bCell = (m, bk) => { const o = ageBy[m]?.[bk]; return o ? `<td class="num"><button type="button" class="link-num" data-age-m="${esc(m)}" data-age-b="${esc(bk)}">${nf(o.n)}</button></td><td class="num">${moneyShort(o.v)}</td>` : `<td class="num">0</td><td class="num">-</td>`; };
       const bTot = bk => { const l = ageRows.filter(a => a.b === bk); return `<td class="num"><b>${nf(l.length)}</b></td><td class="num"><b>${moneyShort(l.reduce((t,a) => t + vAmt(a.v), 0))}</b></td>`; };
-      box("modelDash").innerHTML = mod.length ? `<table class="age-table"><thead><tr><th rowspan="2">Model</th><th rowspan="2">Available Stock</th><th rowspan="2">Stock Value</th>${buckets.map(b => `<th colspan="2" class="grp">${esc(b)}</th>`).join("")}</tr>
+      box("modelDash").innerHTML = mod.length ? `<table class="age-table"><thead><tr><th rowspan="2">Model</th><th rowspan="2">Free Stock</th><th rowspan="2">Stock Value</th>${buckets.map(b => `<th colspan="2" class="grp">${esc(b)}</th>`).join("")}</tr>
         <tr>${buckets.map(() => "<th>Qty</th><th>Value</th>").join("")}</tr></thead><tbody>${mod.map(g => `<tr><td>${esc(g.key)}</td><td class="num">${cell(dimNum(g.n.stock,"model",g.key,"stock"))}</td><td class="num">${moneyShort(g.v.stock)}</td>${buckets.map(bk => bCell(g.key, bk)).join("")}</tr>`).join("")}</tbody>
-        <tfoot><tr><td><b>Total</b></td><td class="num"><b>${nf(tot(mod,"n","stock"))}</b></td><td class="num"><b>${moneyShort(tot(mod,"v","stock"))}</b></td>${buckets.map(bTot).join("")}</tr></tfoot></table>` : emptyState("No available stock yet.");
+        <tfoot><tr><td><b>Total</b></td><td class="num"><b>${nf(tot(mod,"n","stock"))}</b></td><td class="num"><b>${moneyShort(tot(mod,"v","stock"))}</b></td>${buckets.map(bTot).join("")}</tr></tfoot></table>` : emptyState("No free stock yet.");
       bindDim(box("modelDash"));
       box("modelDash").querySelectorAll("[data-age-m]").forEach(b => b.addEventListener("click", () => openAgeModal(b.dataset.ageM, b.dataset.ageB)));
     }
@@ -156,11 +157,11 @@ async function loadDashboardData(){
 
 /* ------------------------------------------- Dashboard: click-through windows + ageing */
 const AGE_NODATE = "No date";
-function ageInfo(all){      // Available Stock only (In Transit, Sales / Not Delivered, Delivered and Pending are not ageing stock)
+function ageInfo(all){      // Free Stock only (In Transit, Tally Done, Delivered and Pending are not ageing stock)
   return all.filter(v => vStage(v) === "stock").map(v => {
     const d = daysSince(v.purchase_date ?? v.hmi_invoice_date); return {v, d, b:d === null ? AGE_NODATE : agingBucket(d)}; });
 }
-const vRow = v => ({...v, location_name:v.location_id ? locName(v.location_id) : "-", aging_days:daysSince(v.purchase_date ?? v.hmi_invoice_date), delivery_no_c:v.delivery_no || v.grn_no});
+const vRow = v => ({...v, location_name:vLocName(v), aging_days:daysSince(v.purchase_date ?? v.hmi_invoice_date), delivery_no_c:v.delivery_no || v.grn_no});
 const DASH_COLS = {
   total:[col("Order No","order_no"),col("Order Date","order_date","date"),col("VIN No.","vin"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Status","status"),col("Location","location_name"),col("Financier Name","finance_company"),col("Order Amount","order_amount","money"),col("Stock Value","stock_value","money")],
   stock:[col("Order No","order_no"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Location","location_name"),col("Dealer","dealer_code"),col("Financier Name","finance_company"),col("HMI Invoice Date","hmi_invoice_date","date"),col("Aging Days","aging_days","days"),col("Stock Value","stock_value","money")],
@@ -170,11 +171,11 @@ const DASH_COLS = {
   delivered:[col("Delivery No","delivery_no_c"),col("Delivery Date","delivery_date","date"),col("VIN No.","vin"),col("Model","model"),col("Variant","variant"),col("Customer","customer_name"),col("Financier Name","finance_company"),col("Location","location_name"),col("Stock Value","stock_value","money")]
 };
 const DASH_KIND = {
-  total:{title:"Total Order Stock — Available + Pending Order + In Transit + Sales / Not Delivered", f:v => vStage(v) !== "delivered"},
-  stock:{title:"Available Stock", f:v => vStage(v) === "stock"},
+  total:{title:"Total Order Stock — Available + Pending Order + In Transit + Tally Done", f:v => vStage(v) !== "delivered"},
+  stock:{title:"Free Stock", f:v => vStage(v) === "stock"},
   transit:{title:"In Transit", f:v => vStage(v) === "transit"},
   pending:{title:"Pending Order", f:v => vStage(v) === "pending"},
-  bill:{title:"Sales / Not Delivered", f:v => vStage(v) === "bill"},
+  bill:{title:"Tally Done", f:v => vStage(v) === "bill"},
   delivered:{title:"Delivered", f:v => vStage(v) === "delivered"}
 };
 async function openStatModal(kind){
@@ -185,28 +186,28 @@ async function openStatModal(kind){
     const rows = all.filter(def.f).map(vRow);
     // Total Order Stock window: stage-wise breakdown so the totals reconcile (order → delivery)
     const chips = kind === "total" ? STAGES.filter(([k]) => k !== "delivered").map(([k,label]) => { const l = rows.filter(r => vStage(r) === k); return `<span class="dm-chip dm-stage">${label}: <b>${l.length.toLocaleString("en-IN")}</b> · ${moneyShort(l.reduce((t,r) => t + vAmt(r), 0))}</span>`; }) : [];
-    openVehicleModal(def.title, rows, DASH_COLS[kind], kind, chips);
+    openVehicleModal(def.title, rows, DASH_COLS[kind], kind, chips, () => openStatModal(kind));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
-const STAGE_TITLE = {stock:"Available Stock", transit:"In Transit", bill:"Sales / Not Delivered", delivered:"Delivered", pending:"Pending Order", all:"All vehicles"};
+const STAGE_TITLE = {stock:"Free Stock", transit:"In Transit", bill:"Tally Done", delivered:"Delivered", pending:"Pending Order", all:"All vehicles"};
 async function openDimModal(dim, key, stage){          // click on a count in a dashboard table / pie
   const d = DIMS[dim]; if(!d) return;
   try {
     const all = await allVehicles(); await getLocations();
     const rows = all.filter(v => d.of(v) === key && (stage === "all" || vStage(v) === stage)).map(vRow);
-    openVehicleModal(`${d.label}: ${key} — ${STAGE_TITLE[stage] || stage}`, rows, DASH_COLS[stage === "all" ? "total" : stage] || DASH_COLS.total, "dashboard-" + dim);
+    openVehicleModal(`${d.label}: ${key} — ${STAGE_TITLE[stage] || stage}`, rows, DASH_COLS[stage === "all" ? "total" : stage] || DASH_COLS.total, "dashboard-" + dim, [], () => openDimModal(dim, key, stage));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
 async function openAgeModal(model, bucket){
   try {
     const all = await allVehicles(); await getLocations();
     const rows = ageInfo(all).filter(a => a.b === bucket && (model === null || (a.v.model || "Not Available") === model)).map(a => vRow(a.v));
-    openVehicleModal(`${model === null ? "All models" : model} — Ageing ${bucket}`, rows, DASH_COLS.stock, "ageing");
+    openVehicleModal(`${model === null ? "All models" : model} — Ageing ${bucket}`, rows, DASH_COLS.stock, "ageing", [], () => openAgeModal(model, bucket));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
 // Window with a filterable, paged vehicle list, summary totals, a Total row and Excel export.
-function openVehicleModal(title, rows, cols, fileKey, chips = []){
-  const sums = cols.filter(c => c.t === "money");
+function openVehicleModal(title, rows, cols, fileKey, chips = [], reopen = null){
+  const sums = cols.filter(c => c.t === "money"), canEdit = state.isAdmin && rows.some(r => r.id);
   openModal(`<div class="modal-bg" id="dmBg"><div class="modal wide" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     <div class="panel-head"><h3>${esc(title)}</h3><div class="report-tools">${filterBtn("dmFilterBox")}<button class="secondary-btn" type="button" id="dmExport">⤓ Export</button><button class="icon-btn" type="button" id="modalClose" aria-label="Close">×</button></div></div>
     ${filterPanel("dmFilterBox", `<div class="filter-grid"><label>Search rows<input id="dmFilter" type="search" placeholder="VIN, model, order no…" aria-label="Filter rows"></label></div>`)}
@@ -217,7 +218,9 @@ function openVehicleModal(title, rows, cols, fileKey, chips = []){
     const list = shown(), tot = c => list.reduce((t, r) => t + Number(r[c.k] || 0), 0);
     $("dmSummary").innerHTML = `<span class="dm-chip"><b>${list.length.toLocaleString("en-IN")}</b> vehicles</span>` + sums.map(c => `<span class="dm-chip">${esc(c.h)}: <b>${money(tot(c))}</b></span>`).join("") + (list.length === rows.length ? chips.join("") : "");
     const footer = list.length ? cols.map((c,i) => i === 0 ? raw(`<b>Total (${list.length.toLocaleString("en-IN")})</b>`) : c.t === "money" ? raw(`<b>${money(tot(c))}</b>`) : "") : null;
-    mountPaged($("dmTable"), {headers:cols.map(c => c.h), footer, rows:list.map(r => cols.map(c => c.k === "status" ? statusBadge(r[c.k]) : fmtCell(c.t === "days" ? "num" : c.t, r[c.k])))});
+    mountPaged($("dmTable"), {headers:[...cols.map(c => c.h), ...(canEdit ? [""] : [])], footer: footer && canEdit ? [...footer, ""] : footer,
+      rows:list.map(r => [...cols.map(c => c.k === "status" ? statusBadge(r[c.k]) : fmtCell(c.t === "days" ? "num" : c.t, r[c.k])), ...(canEdit ? [raw(`<button type="button" class="table-icon-btn" data-dmedit="${esc(r.id)}" title="Edit">✎ Edit</button>`)] : [])]),
+      onDraw:el => el.querySelectorAll("[data-dmedit]").forEach(b => b.addEventListener("click", () => { shut(); editVehicleById(b.dataset.dmedit, () => { if(reopen) reopen(); if(state.page === "dashboard") renderDashboard(); }, reopen); }))});
   };
   const shut = () => { closeModal(); document.removeEventListener("keydown", onKey); };
   const onKey = e => { if(e.key === "Escape") shut(); };
@@ -333,14 +336,28 @@ function reportRows(def, rows, filter){
   const f = filter.trim().toLowerCase();
   return f ? rows.filter(r => def.cols.some(c => String(r[c.k] ?? "").toLowerCase().includes(f))) : rows;
 }
+const REPORT_STAGE = {stock_count:"stock", in_transit_count:"transit", pending_count:"pending", bill_count:"bill", delivered_count:"delivered", vehicle_count:"all"};
 function drawReport(){
   const def = REPORTS[REPORT.key]; if(!def || !$("reportTable")) return;
-  const rows = reportRows(def, REPORT.rows, $("reportFilter")?.value || "");
+  const rows = reportRows(def, REPORT.rows, $("reportFilter")?.value || ""), edit = def.editable && state.isAdmin;
   let footer = null;
   if(def.totals && rows.length) footer = def.cols.map((c,i) => i === 0 ? raw("<b>Total</b>") : (c.t === "num" || c.t === "money")
     ? raw(`<b>${fmtCell(c.t, rows.reduce((s,r) => s + Number(r[c.k] || 0), 0))}</b>`) : "");
-  mountPaged($("reportTable"), {headers:def.cols.map(c => c.h), rows:rows.map(r => def.cols.map(c => fmtCell(c.t, r[c.k]))), footer});
+  if(edit && footer) footer = [...footer, ""];
+  const cellOf = (c, r) => (def.dim && REPORT_STAGE[c.k] && Number(r[c.k]) > 0) ? dimNum(r[c.k], def.dim, r.key, REPORT_STAGE[c.k]) : fmtCell(c.t, r[c.k]);
+  mountPaged($("reportTable"), {headers:[...def.cols.map(c => c.h), ...(edit ? [""] : [])],
+    rows:rows.map(r => [...def.cols.map(c => cellOf(c, r)), ...(edit ? [raw(r.id || r.vehicle_id ? `<button type="button" class="table-icon-btn" data-redit="${esc(r.id || r.vehicle_id)}" title="Edit">✎ Edit</button>` : "")] : [])]), footer,
+    onDraw:el => {
+      el.querySelectorAll("[data-dim]").forEach(b => b.addEventListener("click", () => openDimModal(b.dataset.dim, b.dataset.key, b.dataset.stage)));
+      el.querySelectorAll("[data-redit]").forEach(b => b.addEventListener("click", () => editVehicleById(b.dataset.redit, () => loadReport(REPORT.key))));
+    }});
   $("reportMeta").textContent = `${rows.length.toLocaleString("en-IN")} of ${REPORT.rows.length.toLocaleString("en-IN")} rows`;
+}
+// Opens the Edit Vehicle window for a vehicle id (Admin). after() runs after Save, back() after Cancel.
+async function editVehicleById(id, after, back){
+  const v = (await allVehicles(true)).find(x => String(x.id) === String(id));
+  if(!v) return toast("Vehicle not found.", "error");
+  openVehicleEdit(v, after, back);
 }
 async function renderReport(page){
   const def = REPORTS[page];

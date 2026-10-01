@@ -198,7 +198,7 @@ async function openUserEdit(u){
 
 /* ---------------------------------------------------------------- Vehicle edit / delete (Admin) */
 const EDIT_TYPES = {date:"date", money:"number", num:"number", text:"text"};
-async function openVehicleEdit(v, after){
+async function openVehicleEdit(v, after, back){
   if(!v) return;
   const locs = (await getLocations()).filter(l => l.active !== false || l.id === v.location_id);
   const keys = [...EXCEL_FIELDS, ...DERIVED_FIELDS].map(f => f[0]).filter(k => k in v);
@@ -210,7 +210,8 @@ async function openVehicleEdit(v, after){
     ${"location_id" in v ? `<div><label for="ve_location_id">LOCATION</label><select id="ve_location_id" data-k="location_id"><option value="">— None —</option>${locs.map(l => `<option value="${esc(l.id)}" ${l.id === v.location_id ? "selected" : ""}>${esc(l.location_name)}</option>`).join("")}</select></div>` : ""}</div></div>
     <datalist id="ve_status_list">${statuses.map(s => `<option value="${esc(s)}">`).join("")}</datalist>
     <div class="form-actions"><button type="button" class="secondary-btn" id="modalCancel">Cancel</button><button class="primary-btn" type="submit">Save Changes</button></div></form></div></div>`);
-  $("modalClose").onclick = closeModal; $("modalCancel").onclick = closeModal;
+  const cancel = () => { closeModal(); if(back) back(); };
+  $("modalClose").onclick = cancel; $("modalCancel").onclick = cancel;
   $("vehEditForm").addEventListener("submit", async e => {
     e.preventDefault(); const patch = {};
     document.querySelectorAll("#vehEditForm [data-k]").forEach(el => {
@@ -262,8 +263,8 @@ const DM_TABS = {
 };
 const DM_RESETS = [
   {k:"order", title:"Reset Order data", desc:"Deletes all vehicles still at Pending Order.", count:a => a.filter(v => vStage(v) === "pending").length},
-  {k:"purchase", title:"Reset Purchase data", desc:"Deletes all In Transit and Available Stock vehicles.", count:a => a.filter(v => ["transit","stock"].includes(vStage(v))).length},
-  {k:"sales", title:"Reset Sales data", desc:"Deletes all Sales / Not Delivered and Delivered vehicles.", count:a => a.filter(v => ["bill","delivered"].includes(vStage(v))).length},
+  {k:"purchase", title:"Reset Purchase data", desc:"Deletes all In Transit and Free Stock vehicles.", count:a => a.filter(v => ["transit","stock"].includes(vStage(v))).length},
+  {k:"sales", title:"Reset Sales data", desc:"Deletes all Tally Done and Delivered vehicles.", count:a => a.filter(v => ["bill","delivered"].includes(vStage(v))).length},
   {k:"gate", title:"Reset Gate movements", desc:"Deletes every Bhilarwadi / Branch In-Out entry and its IN photos.", table:"gate_movements"},
   {k:"imports", title:"Clear Import History", desc:"Deletes the import log only (vehicles stay).", table:"import_batches"},
   {k:"all", title:"Reset ALL data", desc:"Deletes every vehicle, delivery, gate movement and import log. Users, roles, locations and settings are kept.", count:a => a.length, danger:true}

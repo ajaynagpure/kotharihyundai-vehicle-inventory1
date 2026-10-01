@@ -1,13 +1,13 @@
 "use strict";
 /* =====================================================================
    IMPORT: Order report -> Pending Order | Purchase report -> In Transit
-           Sales report -> Sales / Not Delivered | Import history
+           Sales report -> Tally Done | Import history
    Column mapping comes from EXCEL_FIELDS (js/fields.js) = Excel headings.
    ===================================================================== */
 const IMPORT_TYPES = {
   "order-import":    {key:"ORDER",    status:"Pending Order", title:"Order Report Import"},
   "purchase-import": {key:"PURCHASE", status:"In Transit",    title:"Purchase Report Import"},
-  "sales-import":    {key:"SALES",    status:"Sales / Not Delivered", title:"Sales Report Import"}
+  "sales-import":    {key:"SALES",    status:"Tally Done", title:"Sales Report Import"}
 };
 const STATUS_MOVABLE = ["", "pending order", "in transit"];   // purchase import never pulls later stages back
 const SQL_HINT = "Database columns are missing. Run IMPORT_COLUMNS_FIX.sql once in Supabase SQL Editor, then import again.";
@@ -110,7 +110,7 @@ async function renderImport(page){
   const rule = {
     ORDER: "File: <b>SaleDealerOrderStatus.xlsx</b>. Status <b>Ordered / Allocated</b> → <b>Pending Order</b>. <b>Invoiced</b> rows are added as <b>In Transit</b> (HMI invoice already raised). If the vehicle already exists (e.g. from the Purchase Report) its order details are filled in and its status is not changed.",
     PURCHASE: "File: <b>VehicleDeliveryStatusReport.xlsx</b>. Imported as <b>In Transit</b>. If the <b>Order No</b> (or VIN) exists as Pending Order it moves to In Transit. In Stock / Delivered vehicles keep their status.",
-    SALES: "Columns: <b>Tally Invoice Date, Vin No., Engine No, Customer Name, Tally Invoice No, Tally Location, Model, Variant, Color, Total Invoice value</b>. Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b> (those columns in the file are ignored). Only rows whose <b>VIN exists in the Purchase report</b> are imported and moved to <b>Sales / Not Delivered</b>. Rows whose VIN is not in the Purchase report are <b>ignored</b>. They become <b>Delivered</b> when the Delivery Entry is saved. Vehicles that are already Delivered are left as they are."
+    SALES: "Columns: <b>Tally Invoice Date, Vin No., Engine No, Customer Name, Tally Invoice No, Tally Location, Model, Variant, Color, Total Invoice value</b>. Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b> (those columns in the file are ignored). Only rows whose <b>VIN exists in the Purchase report</b> are imported and moved to <b>Tally Done</b>. Rows whose VIN is not in the Purchase report are <b>ignored</b>. They become <b>Delivered</b> when the Delivery Entry is saved. Vehicles that are already Delivered are left as they are."
   }[t.key];
   $("content").innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>${esc(t.title)}</h3></div>
     <p class="form-help">${rule}</p>
@@ -136,7 +136,7 @@ async function importPreviewFile(page){
   let ex = null;
   try {
     ex = await importFetchExisting(importRows); const hit = importRows.filter(r => importFind(ex, r)).length;
-    if(t.key === "SALES"){ const ok = importRows.filter(r => importHasPurchase(ex.byVin.get(r.vin))).length; info += ` ${ok} VIN found in Purchase report → will be imported (Sales / Not Delivered). ${importRows.length - ok} VIN not in Purchase report → will be IGNORED.`; }
+    if(t.key === "SALES"){ const ok = importRows.filter(r => importHasPurchase(ex.byVin.get(r.vin))).length; info += ` ${ok} VIN found in Purchase report → will be imported (Tally Done). ${importRows.length - ok} VIN not in Purchase report → will be IGNORED.`; }
     else info += t.key === "PURCHASE" ? ` ${hit} match existing stock, ${importRows.length - hit} new.` : ` ${hit} already in system.`;
   } catch(err){ info += " " + (importMissingColumn(err) ? SQL_HINT : "(Could not check existing stock: " + (err.message || err) + ")"); }
   if(bad) info += ` ${bad} rows have no ${t.key === "ORDER" ? "Order No" : "VIN"} and will be skipped.`;
@@ -151,7 +151,7 @@ async function importPreviewFile(page){
     if(t.key === "SALES" && !SALES_KEEP.includes(c)){ const p = ex?.byVin.get(r.vin); return p ? (c === "total_invoice_value" ? (p.total_invoice_value ?? p.hmi_invoice_amount) : p[c]) : ""; }   // fetched from Purchase report
     return r[c];
   }), ...(t.key === "SALES" ? (() => { const p = ex?.byVin.get(r.vin), ok = importHasPurchase(p);
-      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (unchanged)" : "Sales / Not Delivered"]; })() : [])]));
+      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (unchanged)" : "Tally Done"]; })() : [])]));
   $("importGo").disabled = !importRows.length;
 }
 async function importInsertRows(rows, res){
@@ -167,7 +167,7 @@ async function importInsertRows(rows, res){
 }
 async function importRunRows(key, rows){
   const sb = state.supabase, res = {added:0, updated:0, moved:0, skipped:0, invoiced:0, failed:0, ignored:0, firstError:""};
-  if(key === "SALES"){                                       // matched VIN -> Sales / Not Delivered (Delivered stays Delivered)
+  if(key === "SALES"){                                       // matched VIN -> Tally Done (Delivered stays Delivered)
     const ex = await importFetchExisting(rows), now = new Date().toISOString();
     for(const r of rows.map(importSalesOnly)){
       if(!r.vin){ res.failed++; res.firstError ||= "VIN missing"; continue; }
@@ -226,7 +226,7 @@ async function importRun(page){
   const bits = [`${res.added} added`];
   if(t.key === "PURCHASE") bits.push(`${res.updated} updated (${res.moved} moved Pending Order → In Transit)`);
   if(t.key === "ORDER") bits.push(`${res.updated} existing filled`, `${res.invoiced} of the added rows were Invoiced (In Transit)`);
-  if(t.key === "SALES") bits.push(`${res.updated} marked Sales / Not Delivered`, `${res.skipped} already Delivered (unchanged)`, `${res.ignored} ignored (VIN not in Purchase report)`);
+  if(t.key === "SALES") bits.push(`${res.updated} marked Tally Done`, `${res.skipped} already Delivered (unchanged)`, `${res.ignored} ignored (VIN not in Purchase report)`);
   bits.push(`${res.failed} failed`);
   let text = bits.join(", ") + ".";
   if(res.firstError) text += ` First error: ${res.firstError}` + (importMissingColumn({message:res.firstError}) ? ` — ${SQL_HINT}` : "");
@@ -286,9 +286,10 @@ async function renderImportedData(){
   const info = () => { $("idInfo").textContent = `${idataList(all).length.toLocaleString("en-IN")} records · ${IDATA.sel.size.toLocaleString("en-IN")} selected`; };
   const draw = () => {
     const list = idataList(all); info();
-    mountPaged($("idList"), {headers:["✓", ...t.cols.map(c => c.h)], empty:"No imported records.",
-      rows:list.map(v => [raw(`<input type="checkbox" class="id-chk" data-id="${esc(v.id)}" ${IDATA.sel.has(String(v.id)) ? "checked" : ""} aria-label="Select">`), ...t.cols.map(c => c.k === "status" ? statusBadge(v[c.k]) : fmtCell(c.t, v[c.k]))]),
-      onDraw:el => el.querySelectorAll(".id-chk").forEach(cb => cb.addEventListener("change", () => { cb.checked ? IDATA.sel.add(cb.dataset.id) : IDATA.sel.delete(cb.dataset.id); info(); }))});
+    mountPaged($("idList"), {headers:["✓", ...t.cols.map(c => c.h), ...(state.isAdmin ? ["Edit"] : [])], empty:"No imported records.",
+      rows:list.map(v => [raw(`<input type="checkbox" class="id-chk" data-id="${esc(v.id)}" ${IDATA.sel.has(String(v.id)) ? "checked" : ""} aria-label="Select">`), ...t.cols.map(c => c.k === "status" ? statusBadge(v[c.k]) : fmtCell(c.t, v[c.k])), ...(state.isAdmin ? [raw(`<button type="button" class="table-icon-btn" data-idedit="${esc(v.id)}" title="Edit">✎ Edit</button>`)] : [])]),
+      onDraw:el => { el.querySelectorAll(".id-chk").forEach(cb => cb.addEventListener("change", () => { cb.checked ? IDATA.sel.add(cb.dataset.id) : IDATA.sel.delete(cb.dataset.id); info(); }));
+        el.querySelectorAll("[data-idedit]").forEach(b => b.addEventListener("click", () => openVehicleEdit(all.find(x => String(x.id) === b.dataset.idedit), renderImportedData))); }});
   };
   $("idSearch").addEventListener("input", e => { IDATA.q = e.target.value; draw(); });
   $("idStatus").addEventListener("change", e => { IDATA.status = e.target.value; draw(); });
@@ -306,8 +307,8 @@ async function renderImportedData(){
 async function removeSalesEntries(vs){
   const back = vs.filter(v => vStage(v) === "bill");               // delivered vehicles have a Delivery Entry: undo that from Delivery Entry / Data Management
   const skipped = vs.length - back.length;
-  if(!back.length) return toast("Only Sales / Not Delivered rows can be removed here. Delivered vehicles have a Delivery Entry.","error");
-  if(!confirm(`Remove the sales entry of ${back.length} vehicle${back.length > 1 ? "s" : ""}?\n\nThey go back to Available Stock (if they were received at a location) or In Transit.` + (skipped ? `\n${skipped} Delivered row(s) will be left unchanged.` : ""))) return;
+  if(!back.length) return toast("Only Tally Done rows can be removed here. Delivered vehicles have a Delivery Entry.","error");
+  if(!confirm(`Remove the sales entry of ${back.length} vehicle${back.length > 1 ? "s" : ""}?\n\nThey go back to Free Stock (if they were received at a location) or In Transit.` + (skipped ? `\n${skipped} Delivered row(s) will be left unchanged.` : ""))) return;
   let done = 0, failed = 0;
   for(const v of back){
     const status = v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";

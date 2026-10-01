@@ -13,7 +13,8 @@ async function allVehicles(force = false){
 }
 function vStage(v){
   const s = String(v.status || "").toLowerCase();
-  if(/not[\s\-_\/]*deliver|undeliver/.test(s)) return "bill";          // "Sales / Not Delivered" must not count as Delivered
+  if(s.includes("tally")) return "bill";                                  // "Tally Done" = billed, not yet delivered
+  if(/not[\s\-_\/]*deliver|undeliver/.test(s)) return "bill";          // "Tally Done" must not count as Delivered
   if(s.includes("deliver")) return "delivered";
   if(s.includes("pending")) return "pending";
   if(s.includes("transit")) return "transit";
@@ -21,8 +22,29 @@ function vStage(v){
   return "stock";
 }
 const vValue = v => Number(v.stock_value || 0);
+// Location of a vehicle. Tally Done vehicles stay in their location until the Delivery Entry is saved;
+// if no location was recorded yet, the Tally Location from the Sales report is used when it matches a known location.
+function vLocName(v){
+  if(v.location_id) return locName(v.location_id);
+  if(vStage(v) === "bill" && v.sales_location){
+    const k = String(v.sales_location).trim().toLowerCase(), l = (state.locations || []).find(x => String(x.location_name).trim().toLowerCase() === k);
+    if(l) return l.location_name;
+  }
+  return "Not Assigned";
+}
+// Location wise report: Free Stock + Tally Done counts, their combined value, and Delivered count + purchase value.
+function locationRows(all){
+  const m = new Map();
+  all.forEach(v => { const k = vLocName(v), st = vStage(v);
+    const x = m.get(k) || {key:k, location_name:k, stock_count:0, bill_count:0, total_value:0, delivered_count:0, delivered_value:0};
+    if(st === "stock"){ x.stock_count++; x.total_value += vValue(v); }
+    else if(st === "bill"){ x.bill_count++; x.total_value += vValue(v); }
+    else if(st === "delivered"){ x.delivered_count++; x.delivered_value += vValue(v); }
+    m.set(k, x); });
+  return [...m.values()].filter(x => x.stock_count + x.bill_count + x.delivered_count);
+}
 function groupStock(vehicles, keyOf){
-  // Available Stock = stage "stock" only. In Transit, Pending Order and Sales / Not Delivered are counted separately; Delivered is left out.
+  // Free Stock = stage "stock" only. In Transit, Pending Order and Tally Done are counted separately; Delivered is left out.
   const g = new Map();
   vehicles.filter(v => vStage(v) !== "delivered").forEach(v => {
     const k = keyOf(v) || "Not Available";
@@ -64,15 +86,15 @@ async function computedRows(source){
       const c = {stock:0, pending:0, transit:0, bill:0, delivered:0}; all.forEach(v => c[vStage(v)]++);
       return [{total_stock:c.stock + c.transit + c.pending + c.bill, available_stock:c.stock, in_transit:c.transit, pending_order:c.pending, bill_not_delivered:c.bill, delivered:c.delivered}];
     }
-    case "location_stock_report":    return groupStock(all, v => v.location_id ? locName(v.location_id) : "Not Assigned").map(x => ({...x, location_name:x.key}));
+    case "location_stock_report":    return locationRows(all);
     case "model_stock_report":       return groupStock(all, v => v.model).map(x => ({...x, model:x.key}));
     case "finance_stock_report":     return groupStock(all, v => v.finance_company || "Not Financed").map(x => ({...x, finance_company:x.key}));
     case "dealer_code_stock_report": return groupStock(all, v => v.dealer_code).map(x => ({...x, dealer_code:x.key}));
     case "aging_report": return all.filter(v => vStage(v) === "stock").map(v => {
-      const d = daysSince(v.purchase_date ?? v.hmi_invoice_date); return d === null ? null : {vin:v.vin, model:v.model, status:v.status, purchase_date:v.purchase_date ?? v.hmi_invoice_date, aging_days:d, aging_bucket:agingBucket(d)};
+      const d = daysSince(v.purchase_date ?? v.hmi_invoice_date); return d === null ? null : {id:v.id, vin:v.vin, model:v.model, status:v.status, purchase_date:v.purchase_date ?? v.hmi_invoice_date, aging_days:d, aging_bucket:agingBucket(d)};
     }).filter(Boolean);
     case "in_transit_report":    return all.filter(v => vStage(v) === "transit");
-    case "pending_order_report": return all.filter(v => vStage(v) === "pending").map(v => ({order_no:v.order_no, order_date:v.order_date, model:v.model, variant:v.variant, quantity:1, expected_date:null, status:v.status, color:v.color, pis_no:v.pis_no}));
+    case "pending_order_report": return all.filter(v => vStage(v) === "pending").map(v => ({id:v.id, order_no:v.order_no, order_date:v.order_date, model:v.model, variant:v.variant, quantity:1, expected_date:null, status:v.status, color:v.color, pis_no:v.pis_no}));
     case "delivery_report":      return all.filter(v => vStage(v) === "delivered").map(v => ({delivery_no:v.delivery_no || v.grn_no, vehicle_id:v.id, delivery_date:v.delivery_date, vin:v.vin, model:v.model, customer_name:v.customer_name, finance_company:v.finance_company, location_name:v.location_id ? locName(v.location_id) : ""}));
     default: return all;
   }

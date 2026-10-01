@@ -23,9 +23,9 @@ const MENU = [
   ]},
   {section:"REPORTS", items:[
     ["location-report","Location wise Stock","▥"],["model-report","Model wise Stock","▥"],
-    ["finance-report","Finance wise Available Stock","₹"],["aging-report","Aging Report","◴"],["delivery-report","Delivery Report","✓"],
+    ["finance-report","Finance wise Free Stock","₹"],["aging-report","Aging Report","◴"],["delivery-report","Delivery Report","✓"],
     ["pending-report","Pending Order Report","!"],["transit-report","In Transit Report","→"],["gate-report","Gate Movement Report","⇄"],
-    ["dealer-report","Dealer Code wise Available Stock","▥"]
+    ["dealer-report","Dealer Code wise Free Stock","▥"]
   ]},
   {section:"ADMINISTRATION", items:[
     ["users","Users & Roles","♙"],["permissions","Permissions","⚿"],
@@ -133,7 +133,7 @@ function statusClass(s){
   const k = String(s || "").toLowerCase();
   if(k.includes("pending")) return "warn";
   if(k.includes("transit")) return "info";
-  if(/not[\s\-_\/]*deliver|undeliver/.test(k) || k.includes("bill") || k.includes("sales") || k.includes("sold")) return "purple";   // Sales / Not Delivered
+  if(k.includes("tally") || /not[\s\-_\/]*deliver|undeliver/.test(k) || k.includes("bill") || k.includes("sales") || k.includes("sold")) return "purple";   // Tally Done
   if(k.includes("deliver")) return "ok";
   return "";
 }
