@@ -23,8 +23,7 @@ function vStage(v){
   return "stock";
 }
 const vValue = v => Number(v.stock_value || 0);
-// Location of a vehicle. Tally Done vehicles stay in their location until the Delivery Entry is saved;
-// if no location was recorded yet, the Tally Location from the Sales report is used when it matches a known location.
+// Tally Done vehicles stay in their location until delivery. Unassigned In Transit vehicles are awaiting Bhilarwadi arrival.
 function vLocName(v){
   if(vStage(v) === "delivered" && v.delivery_location) return v.delivery_location;
   if(v.location_id) return locName(v.location_id);
@@ -32,19 +31,24 @@ function vLocName(v){
     const k = String(v.sales_location).trim().toLowerCase(), l = (state.locations || []).find(x => String(x.location_name).trim().toLowerCase() === k);
     if(l) return l.location_name;
   }
+  if(vStage(v) === "transit") return "Bhilarwadi Stock Arriving";
   return "Not Assigned";
 }
-// Location wise report: Free Stock + Tally Done counts, their combined value, and Delivered count + purchase value.
+// Location-wise Free Stock, In Transit and Tally Done counts and values.
 function locationRows(all){
   const m = new Map();
   all.forEach(v => { const k = vLocName(v), st = vStage(v);
-    if(st === "cancelled") return;
-    const x = m.get(k) || {key:k, location_name:k, stock_count:0, bill_count:0, total_value:0, delivered_count:0, delivered_value:0};
-    if(st === "stock"){ x.stock_count++; x.total_value += vValue(v); }
-    else if(st === "bill"){ x.bill_count++; x.total_value += vValue(v); }
-    else if(st === "delivered"){ x.delivered_count++; x.delivered_value += vValue(v); }
+    if(!["stock","transit","bill"].includes(st)) return;
+    const x = m.get(k) || {key:k, location_name:k, stock_count:0, stock_value:0, in_transit_count:0, in_transit_value:0, bill_count:0, bill_value:0};
+    if(st === "stock"){ x.stock_count++; x.stock_value += vValue(v); }
+    else if(st === "transit"){ x.in_transit_count++; x.in_transit_value += vValue(v); }
+    else if(st === "bill"){ x.bill_count++; x.bill_value += vValue(v); }
     m.set(k, x); });
-  return [...m.values()].filter(x => x.stock_count + x.bill_count + x.delivered_count).sort((a,b) => compareLocationNames(a.location_name,b.location_name));
+  return [...m.values()]
+    .map(x => ({...x, available_count:x.stock_count + x.bill_count,
+      total_count:x.stock_count + x.in_transit_count + x.bill_count,
+      total_value:x.stock_value + x.in_transit_value + x.bill_value}))
+    .sort((a,b) => compareLocationNames(a.location_name,b.location_name));
 }
 function groupStock(vehicles, keyOf){
   // Free Stock = stage "stock" only. In Transit, Pending Order and Tally Done are counted separately; Delivered is left out.
@@ -72,16 +76,36 @@ function daysSince(iso){
 }
 async function gateRowsFallback(){
   const sb = state.supabase;
-  const r = await sb.from("gate_movements").select("*").order("created_at",{ascending:false}).limit(1000);
-  if(r.error) return [];
-  return (r.data || []).map(x => {
+  const rows = await fetchAll(() => sb.from("gate_movements").select("*").order("created_at",{ascending:false}), {max:50000});
+  return rows.map(x => {
     const inbound = String(x.movement_type || "").toUpperCase() === "IN", loc = x.location_name || "";
     return {...x, movement_time:x.movement_time || x.created_at || x.receipt_dt,
       from_location:x.from_location || (inbound ? "" : loc), to_location:x.to_location || (inbound ? loc : "")};
   });
 }
+function awaitingArrivalRows(vehicles, movements){
+  const vehicleById = new Map(vehicles.map(v => [String(v.id), v]));
+  const vehicleByVin = new Map(vehicles.map(v => [String(v.vin || "").replace(/\s+/g,"").toUpperCase(), v]).filter(([vin]) => vin));
+  const historyByVin = new Map();
+  movements.forEach(r => {
+    const key = String(r.vin || r.vehicle_no || "").replace(/\s+/g,"").toUpperCase();
+    if(key){ if(!historyByVin.has(key)) historyByVin.set(key, []); historyByVin.get(key).push(r); }
+  });
+  return [...historyByVin.entries()].flatMap(([key, history]) => {
+    history.sort((a,b) => String(a.created_at || a.movement_time || a.receipt_dt || "").localeCompare(String(b.created_at || b.movement_time || b.receipt_dt || "")));
+    const lastIndex = history.length - 1, r = history[lastIndex];
+    if(!r || String(r.movement_type || "").toUpperCase() !== "OUT") return [];
+    const outLocation = String(r.location_name || r.from_location || "").trim();
+    if(!outLocation) return [];
+    const vehicle = (r.vehicle_id && vehicleById.get(String(r.vehicle_id))) || vehicleByVin.get(key);
+    if(!vehicle || !["stock","bill"].includes(vStage(vehicle))) return [];
+    return [{...r, id:vehicle.id, vin:r.vin || vehicle.vin, model:vehicle.model, status:vehicle.status,
+      stock_value:vehicle.stock_value, in_location:String(r.to_location || "").trim(), out_location:outLocation}];
+  });
+}
 async function computedRows(source){
   if(source === "gate_movement_report") return gateRowsFallback();
+  if(source === "awaiting_arrival_report") return awaitingArrivalRows(await allVehicles(), await gateRowsFallback());
   const all = await allVehicles();
   await getLocations();
   switch(source){

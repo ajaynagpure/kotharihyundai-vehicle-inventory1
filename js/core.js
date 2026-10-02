@@ -15,7 +15,7 @@ const MENU = [
     ["sales-import","Sales Report Import","⇧"],["import-data","Imported Data","☰"],["import-history","Import History","≡"]
   ]},
   {section:"GATE MANAGEMENT", items:[
-    ["bhilarwadi","Bhilarwadi In / Out","⇄"],["gate","Branch Vehicle In / Out","⇄"],
+    ["bhilarwadi","Bhilarwadi In","⇄"],["gate","Branch Vehicle In / Out","⇄"],
     ["gate-pass","Gate Pass","▣"],["register","In-Out Register","☷"]
   ]},
   {section:"DELIVERY", items:[
@@ -24,7 +24,7 @@ const MENU = [
   {section:"REPORTS", items:[
     ["location-report","Location wise Stock","▥"],["model-report","Model wise Stock","▥"],
     ["finance-report","Finance wise Free Stock","₹"],["aging-report","Aging Report","◴"],["delivery-report","Delivery Report","✓"],
-    ["pending-report","Pending Order Report","!"],["transit-report","In Transit Report","→"],["gate-report","Gate Movement Report","⇄"],
+    ["pending-report","Pending Order Report","!"],["transit-report","In Transit Report","→"],["arriving-report","Arriving Vehicles","↗"],["gate-report","Gate Movement Report","⇄"],
     ["dealer-report","Dealer Code wise Free Stock","▥"]
   ]},
   {section:"ADMINISTRATION", items:[
@@ -43,7 +43,7 @@ const MENU = [
    If a role has NO rows in role_permissions, DEFAULT_PERMS below is used, so
    nobody is locked out before the Permissions screen is configured.        */
 const ALL_PERMS = ["dashboard.view","vehicle.view","vehicle.update","import.order","import.purchase","import.sales",
-  "gate.inout","gate.pass","delivery.manage","reports.view","users.manage","permissions.manage","settings.manage"];
+  "gate.inout","gate.pass","delivery.manage","reports.view","value.view","users.manage","permissions.manage","settings.manage"];
 
 const PAGE_PERM = {
   dashboard:"dashboard.view",
@@ -60,11 +60,11 @@ MENU.find(g => g.section === "REPORTS").items.forEach(([id]) => { PAGE_PERM[id] 
 
 const DEFAULT_PERMS = {
   accounts: ["dashboard.view","vehicle.view","vehicle.update","import.order","import.purchase","import.sales",
-             "gate.inout","gate.pass","delivery.manage","reports.view"],
+             "gate.inout","gate.pass","delivery.manage","reports.view","value.view"],
   "gate operator": ["gate.inout","gate.pass"],
   "security guard": ["gate.inout"],
   viewer: ["dashboard.view","reports.view"],
-  owner: ["dashboard.view","reports.view"]
+  owner: ["dashboard.view","reports.view","value.view"]
 };
 
 const state = {
@@ -158,11 +158,12 @@ document.addEventListener("keydown", e => { const th=e.target.closest?.("th"); i
 function emptyState(text){ return `<div class="empty-state"><div class="empty-icon">⌁</div><p>${esc(text)}</p></div>`; }
 // Short Indian format for dashboard cards: 22,06,743.96 -> ₹ 22.07 L, 1,25,00,000 -> ₹ 1.25 Cr
 function moneyShort(v){
+  if(!hasPerm("value.view")) return "—";
   const n = Number(v || 0), a = Math.abs(n), s = n < 0 ? "-" : "", f = (x, u) => `${s}₹ ${Number(x.toFixed(2))} ${u}`;
   if(a >= 1e7) return f(a / 1e7, "Cr"); if(a >= 1e5) return f(a / 1e5, "L"); if(a >= 1e3) return f(a / 1e3, "K");
   return `${s}₹ ${Math.round(a).toLocaleString("en-IN")}`;
 }
-function money(v){ return "₹ " + Number(v || 0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function money(v){ return hasPerm("value.view") ? "₹ " + Number(v || 0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"; }
 function fmtDT(v){
   if(!v) return "-";
   const d = new Date(v); if(isNaN(d)) return String(v);

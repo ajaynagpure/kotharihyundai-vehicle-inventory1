@@ -474,6 +474,7 @@ INSERT INTO public.permissions(code,name,description) VALUES
 ('gate.pass','Gate Pass','Manage gate passes'),
 ('delivery.manage','Delivery','Manage deliveries'),
 ('reports.view','Reports','View all reports'),
+('value.view','Stock Value','View monetary values across the app'),
 ('users.manage','Users','Create and manage users'),
 ('permissions.manage','Permissions','Manage permissions'),
 ('settings.manage','Settings','Manage system settings')
@@ -1107,7 +1108,7 @@ NOTIFY pgrst, 'reload schema';
 -- ============================================================
 -- SOURCE: LOCATION_ACCESS_SECURITY.sql
 -- ============================================================
--- Assigned-location users see only their location; Admin and unassigned users retain all-location access.
+-- Assigned-location users see only their location; only Admin retains all-location access.
 CREATE OR REPLACE FUNCTION public.current_user_location_id()
 RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT location_id FROM public.user_profiles
@@ -1115,6 +1116,23 @@ RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION public.current_user_location_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.current_user_location_id() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.gate_destination_locations()
+RETURNS TABLE(location_name text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT l.location_name
+  FROM public.locations l
+  WHERE l.active IS DISTINCT FROM FALSE
+    AND l.id <> public.current_user_location_id()
+    AND EXISTS (
+      SELECT 1 FROM public.user_profiles up
+      WHERE up.id = auth.uid() AND up.active IS NOT FALSE
+        AND up.location_id IS NOT NULL
+    )
+  ORDER BY l.location_name;
+$$;
+REVOKE ALL ON FUNCTION public.gate_destination_locations() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.gate_destination_locations() TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.location_row_allowed(p_location_id uuid, p_location_name text DEFAULT NULL)
 RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -1126,7 +1144,8 @@ BEGIN
   SELECT location_id, active INTO v_location_id, v_active
     FROM public.user_profiles WHERE id = auth.uid();
   IF NOT FOUND OR v_active IS FALSE THEN RETURN false; END IF;
-  IF public.is_admin() OR v_location_id IS NULL THEN RETURN true; END IF;
+  IF public.is_admin() THEN RETURN true; END IF;
+  IF v_location_id IS NULL THEN RETURN false; END IF;
   IF p_location_id = v_location_id THEN RETURN true; END IF;
   IF p_location_id IS NOT NULL OR p_location_name IS NULL THEN RETURN false; END IF;
   SELECT location_name INTO v_location_name FROM public.locations WHERE id = v_location_id;
@@ -1149,7 +1168,10 @@ BEGIN
         OR public.location_row_allowed(v.location_id, v.sales_location))
   ) OR EXISTS (
     SELECT 1 FROM public.gate_movements gm WHERE upper(coalesce(gm.vin, '')) = upper(v_vin)
-      AND public.location_row_allowed(NULL, gm.location_name)
+      AND (public.location_row_allowed(NULL, gm.location_name)
+        OR EXISTS (SELECT 1 FROM public.vehicles v WHERE v.id = gm.vehicle_id
+          AND (public.location_row_allowed(v.location_id, v.delivery_location)
+            OR public.location_row_allowed(v.location_id, v.sales_location))))
   );
 END;
 $$;
@@ -1203,11 +1225,36 @@ WITH CHECK (
 DROP POLICY IF EXISTS gate_movements_location_scope ON public.gate_movements;
 CREATE POLICY gate_movements_location_scope ON public.gate_movements FOR SELECT TO authenticated
 USING (public.location_row_allowed(NULL, location_name)
-  OR (location_name IS NULL AND EXISTS (
+  OR EXISTS (
     SELECT 1 FROM public.vehicles v WHERE v.id=gate_movements.vehicle_id
       AND (public.location_row_allowed(v.location_id, v.delivery_location)
         OR public.location_row_allowed(v.location_id, v.sales_location))
-  )));
+  ));
+
+DROP POLICY IF EXISTS gate_movements_location_insert ON public.gate_movements;
+-- Assigned users may select an OUT destination, but only for a vehicle in their assigned location.
+CREATE POLICY gate_movements_location_insert ON public.gate_movements FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (SELECT 1 FROM public.user_profiles up WHERE up.id = auth.uid() AND up.active IS NOT FALSE)
+  AND (
+    (public.location_row_allowed(NULL, location_name)
+      AND (vehicle_id IS NULL OR EXISTS (
+        SELECT 1 FROM public.vehicles v WHERE v.id = gate_movements.vehicle_id
+          AND (public.location_row_allowed(v.location_id, v.delivery_location)
+            OR public.location_row_allowed(v.location_id, v.sales_location))
+      )))
+    OR (NOT public.is_admin()
+      AND upper(trim(coalesce(movement_type, ''))) = 'OUT'
+      AND vehicle_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM public.vehicles v WHERE v.id = gate_movements.vehicle_id
+        AND (public.location_row_allowed(v.location_id, v.delivery_location)
+          OR public.location_row_allowed(v.location_id, v.sales_location)))
+      AND EXISTS (SELECT 1 FROM public.locations l
+        WHERE l.active IS DISTINCT FROM FALSE
+          AND lower(trim(l.location_name)) = lower(trim(coalesce(gate_movements.location_name, '')))
+          AND l.id <> public.current_user_location_id()))
+  )
+);
 
 DO $$
 BEGIN

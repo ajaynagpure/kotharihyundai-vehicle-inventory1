@@ -9,7 +9,7 @@ async function renderAdmin(page){
       <div><label>FULL NAME</label><input name="full_name" required></div>
       <div><label>PASSWORD</label><div class="password-field"><input id="newUserPassword" name="password" required type="password" minlength="6" maxlength="12" placeholder="6 to 12 characters"><button type="button" class="password-eye" data-password-toggle="newUserPassword" aria-label="Show password" title="Show password">👁</button></div></div>
       <div><label>ROLE</label><select name="role_id" id="newUserRole" required></select></div>
-      <div><label>LOCATION</label><select name="location_id" id="newUserLocation"></select></div>
+      <div><label>LOCATION</label><select name="location_id" id="newUserLocation" required></select></div>
       <div><label>STATUS</label><select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></div>
       <div class="full form-actions"><button class="primary-btn" type="submit">Create User</button></div></form><div id="createUserMessage" class="message"></div></div>
       <div class="panel"><div class="panel-head"><h3>Users</h3></div><div id="usersTable" class="table-wrap"></div></div>
@@ -17,6 +17,14 @@ async function renderAdmin(page){
     const [roles, locs] = await Promise.all([sb.from("roles").select("id,name").order("name"), getLocations()]);
     $("newUserRole").innerHTML = `<option value="">Select role</option>` + (roles.data||[]).map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("");
     $("newUserLocation").innerHTML = `<option value="">All Locations</option>` + locs.filter(l => l.active !== false).map(l => `<option value="${esc(l.id)}">${esc(l.location_name)}</option>`).join("");
+    const syncLocationRequirement = () => {
+      const selectedRole = (roles.data || []).find(r => String(r.id) === $("newUserRole").value);
+      const isAdminRole = String(selectedRole?.name || "").trim().toLowerCase() === "admin";
+      $("newUserLocation").required = !isAdminRole;
+      $("newUserLocation").options[0].textContent = isAdminRole ? "All Locations" : "Select Location";
+    };
+    $("newUserRole").addEventListener("change", syncLocationRequirement);
+    syncLocationRequirement();
     $("createUserForm").addEventListener("submit", createUser);
     renderRolesPanel();
     return loadUsers();
@@ -40,6 +48,8 @@ async function createUser(e){
   const f = Object.fromEntries(new FormData(e.target).entries()), msg = $("createUserMessage");
   const say = (t, cls) => { msg.textContent = t; msg.className = "message " + (cls||""); };
   if(f.password.length < 6 || f.password.length > 12) return say("Password must be 6 to 12 characters.","error");
+  const roleName = $("newUserRole").selectedOptions[0]?.textContent.trim().toLowerCase();
+  if(roleName !== "admin" && !f.location_id) return say("Select a location for this user.","error");
   const {data:{session}} = await state.supabase.auth.getSession();
   if(!session) return say("Session expired. Please login again.","error");
   say("Creating user…");
@@ -129,14 +139,43 @@ async function renderPermissions(){
   const [roles, perms, rp] = await Promise.all([sb.from("roles").select("id,name").order("name"), sb.from("permissions").select("id,code,description").order("code"), sb.from("role_permissions").select("role_id,permission_id")]);
   const err = roles.error || perms.error || rp.error;
   if(err){ $("content").innerHTML = `<div class="panel">${emptyState(err.message)}</div>`; return; }
-  const has = new Set((rp.data||[]).map(x => x.role_id + "|" + x.permission_id));
+  const grantsByRole = new Map();
+  (rp.data||[]).forEach(x => {
+    if(!grantsByRole.has(x.role_id)) grantsByRole.set(x.role_id, new Set());
+    grantsByRole.get(x.role_id).add(x.permission_id);
+  });
   const editable = (roles.data||[]).filter(r => String(r.name).toLowerCase() !== "admin");
+  const defaultsForRole = role => DEFAULT_PERMS[String(role.name).toLowerCase()] || DEFAULT_PERMS.viewer;
+  const roleHasPermission = (role, permission) => {
+    const grants = grantsByRole.get(role.id);
+    if(grants?.size) return grants.has(permission.id);
+    return defaultsForRole(role).includes(permission.code);
+  };
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Permissions</h3></div><p class="form-help">Admin always has full access. Tick to allow; changes save instantly.</p><div class="table-wrap"><table><thead><tr><th>Permission</th>${editable.map(r => `<th>${esc(r.name)}</th>`).join("")}</tr></thead><tbody>${
-    (perms.data||[]).map(p => `<tr><td title="${esc(p.description||"")}">${esc(p.code)}</td>${editable.map(r => `<td><input type="checkbox" data-r="${esc(r.id)}" data-p="${esc(p.id)}" ${has.has(r.id+"|"+p.id)?"checked":""}></td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+    (perms.data||[]).map(p => `<tr><td title="${esc(p.description||"")}">${esc(p.code)}</td>${editable.map(r => `<td><input type="checkbox" data-r="${esc(r.id)}" data-p="${esc(p.id)}" ${roleHasPermission(r,p)?"checked":""}></td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
   $("content").querySelectorAll("input[data-r]").forEach(cb => cb.addEventListener("change", async () => {
-    const q = cb.checked ? sb.from("role_permissions").insert({role_id:cb.dataset.r, permission_id:cb.dataset.p})
-                         : sb.from("role_permissions").delete().eq("role_id",cb.dataset.r).eq("permission_id",cb.dataset.p);
+    const role = editable.find(r => r.id === cb.dataset.r), permission = (perms.data||[]).find(p => p.id === cb.dataset.p);
+    if(!role || !permission) return;
+    const grants = grantsByRole.get(role.id);
+    let q, seededGrants = null;
+    if(grants?.size){
+      q = cb.checked ? sb.from("role_permissions").insert({role_id:role.id, permission_id:permission.id})
+        : sb.from("role_permissions").delete().eq("role_id",role.id).eq("permission_id",permission.id);
+    } else {
+      const effective = new Set(defaultsForRole(role));
+      if(cb.checked) effective.add(permission.code); else effective.delete(permission.code);
+      const rows = [...effective].map(code => (perms.data||[]).find(p => p.code === code))
+        .filter(Boolean).map(p => ({role_id:role.id, permission_id:p.id}));
+      seededGrants = new Set(rows.map(p => p.permission_id));
+      q = sb.from("role_permissions").insert(rows);
+    }
     const {error} = await q;
-    if(error){ toast(error.message,"error"); cb.checked = !cb.checked; } else logAudit("PERMISSION","permissions","role",cb.dataset.r,{permission:cb.dataset.p, allowed:cb.checked});
+    if(error){ toast(error.message,"error"); cb.checked = !cb.checked; }
+    else {
+      if(seededGrants) grantsByRole.set(role.id,seededGrants);
+      else if(cb.checked) grantsByRole.get(role.id).add(permission.id);
+      else grantsByRole.get(role.id).delete(permission.id);
+      logAudit("PERMISSION","permissions","role",cb.dataset.r,{permission:permission.code, allowed:cb.checked});
+    }
   }));
 }

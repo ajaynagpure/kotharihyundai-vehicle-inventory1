@@ -12,15 +12,15 @@ const toItem = (v, fromMove) => ({vehicle_id: fromMove ? (v.vehicle_id || null) 
 
 /* ---------------- Bulk In / Out ---------------- */
 const BULK_LOC = gate => gate === "Bhilarwadi" ? locSelect("bkLocation","bkLocation","Bhilarwadi") : locSelect("bkLocation","bkLocation","","— Select Location —");
-function bulkHtml(showDriver = true, gate = ""){ return `<div class="bulk-wrap">
+function bulkHtml(showDriver = true, gate = ""){ const bhilarwadi = gate === "Bhilarwadi"; return `<div class="bulk-wrap">
   <div class="gate-form-grid">
-    <div class="gate-field"><label>MOVEMENT <span>*</span></label><select id="bkType"><option>IN</option><option>OUT</option></select></div>
+    <div class="gate-field"><label>MOVEMENT <span>*</span></label><select id="bkType">${bhilarwadi ? '<option selected>IN</option>' : '<option>IN</option><option>OUT</option>'}</select></div>
     <div class="gate-field"><label>LOCATION <span>*</span></label>${BULK_LOC(gate)}</div>
     <div class="gate-field"><label>REASON <span>*</span></label><select id="bkReason"><option>NEW VEHICLE</option></select></div>
     <div class="gate-field"><label>RECEIPT DATE <span>*</span></label><input id="bkDate" type="date"></div>
     ${showDriver ? `<div class="gate-field"><label>DRIVER NAME</label><input id="bkDriver"></div>` : ""}
     <div class="gate-field gate-remarks-field"><label>REMARKS</label><textarea id="bkRemarks"></textarea></div>
-    <div class="gate-field gate-pass-field"><label>GATE PASS (PHOTO) — applies to all selected vehicles</label><input type="file" accept="image/*" id="bkPassFile" class="in-file"><small id="bkPassFile_n" class="in-note"></small></div>
+    <div class="gate-field gate-pass-field"><label>GATE PASS (PHOTO) <span>*</span> — applies to all selected vehicles</label><input type="file" accept="image/*" id="bkPassFile" class="in-file" required><small id="bkPassFile_n" class="in-note"></small></div>
   </div>
   <div class="bulk-block"><b>1. Chassis निवडा</b>
     <div class="gate-filters"><input id="bkSearch" type="search" placeholder="VIN / last 6 digits" style="width:180px"><button class="primary-btn" type="button" id="bkFind">⌕ Search</button><button class="secondary-btn" type="button" id="bkScan">📷 Scan</button><button class="secondary-btn" type="button" id="bkInside">Currently IN (this gate)</button></div>
@@ -31,6 +31,7 @@ function bulkHtml(showDriver = true, gate = ""){ return `<div class="bulk-wrap">
     <div class="gate-action-buttons"><button class="secondary-btn" type="button" id="bkClear">↻ Clear list</button><button class="primary-btn" type="button" id="bkSave">▣ Save Bulk Movement</button></div></div></div>`; }
 
 function initBulk(gate, showDriver = true){
+  if(!state.isAdmin) return;
   BULK.gate = gate; BULK.items = []; BULK.pick = []; BULK.driver = showDriver; GATE_GATE = gate;
   $("bkDate").value = todayLocal();
   const show = b => { $("gateSingle").hidden = b; $("gateBulk").hidden = !b; $("tabSingle").classList.toggle("active", !b); $("tabBulk").classList.toggle("active", b); };
@@ -100,19 +101,34 @@ function drawBulkList(){
   box.querySelectorAll("[data-rm]").forEach(b => b.addEventListener("click", () => { BULK.items.splice(+b.dataset.rm, 1); drawBulkList(); }));
 }
 async function saveBulk(){
+  if(!state.isAdmin) return toast("Bulk In / Out is available to administrators only.","error");
   const items = BULK.items, type = $("bkType").value, date = $("bkDate").value;
+  if(BULK.gate === "Bhilarwadi" && type !== "IN") return toast("Bhilarwadi In page only allows IN movements.","error");
   if(!items.length){ toast("आधी chassis निवडा.","error"); return; }
   if(!date){ toast("Receipt date टाका.","error"); return; }
   const location = nz($("bkLocation")?.value);
   if(!location){ toast("Location निवडा.","error"); return; }
+  if(!$("bkPassFile")?.files?.[0]){ toast("Upload the gate pass photo before saving bulk movements.","error"); return; }
   const btn = $("bkSave"); btn.disabled = true;
   try {
     const vins = items.map(i => i.vin);
-    const last = await state.supabase.from("gate_movements").select("vin,movement_type").eq("gate_name", BULK.gate).in("vin", vins).order("created_at",{ascending:false}).limit(5000);
-    if(!last.error){
-      const seen = {}; (last.data || []).forEach(x => { if(!(x.vin in seen)) seen[x.vin] = x.movement_type; });
-      const dup = vins.filter(v => seen[v] === type);
-      if(dup.length && !confirm(`${dup.length} वाहनांची last movement आधीच ${type} आहे. तरीही save करायचे?`)) return;
+    const latestByVin = new Map();
+    try {
+      for(const vin of vins) latestByVin.set(vin, await latestGateMovement(vin));
+    } catch(err){ toast("Could not verify previous gate movements: " + err.message,"error"); return; }
+    if(type === "OUT"){
+      const blocked = vins.filter(vin => gateOutBlocked(latestByVin.get(vin), type));
+      if(blocked.length){
+        const sample = blocked.slice(0,5).join(", ");
+        toast(`${blocked.length} vehicle(s) already OUT. Save an IN movement before another OUT: ${sample}${blocked.length > 5 ? ", …" : ""}`,"error");
+        return;
+      }
+    } else {
+      const duplicateIn = vins.filter(vin => {
+        const last = latestByVin.get(vin);
+        return last?.movement_type === type && last.gate_name === BULK.gate;
+      });
+      if(duplicateIn.length && !confirm(`${duplicateIn.length} वाहनांची last movement आधीच ${type} आहे. तरीही save करायचे?`)) return;
     }
     const extras = items.map(() => ({}));
     if(BULK.gate === "Bhilarwadi" && type === "IN"){

@@ -318,7 +318,8 @@ async function renderImportedData(){
   $("idAll").onclick = () => { idataList(all).forEach(v => IDATA.sel.add(String(v.id))); draw(); };
   $("idNone").onclick = () => { IDATA.sel.clear(); draw(); };
   $("idExp").onclick = () => { const l = idataList(all); if(!l.length) return toast("Nothing to export.","error");
-    exportSheet("imported-" + IDATA.tab.toLowerCase(), t.cols.map(c => c.h), l.map(r => t.cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
+    const cols = hasPerm("value.view") ? t.cols : t.cols.filter(c => c.t !== "money");
+    exportSheet("imported-" + IDATA.tab.toLowerCase(), cols.map(c => c.h), l.map(r => cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
   $("idDel").onclick = async () => {
     const vs = all.filter(v => IDATA.sel.has(String(v.id))); if(!vs.length) return toast("Select rows first.","error");
     if(IDATA.tab === "SALES") return removeSalesEntries(vs);

@@ -29,7 +29,6 @@ const sysBool = k => { const v = state.settings?.sys?.[k]; return v === undefine
 function applyBranding(){
   const name = companyName(), strong = document.querySelector(".side-brand strong");
   if(strong) strong.textContent = name.toUpperCase();
-  document.querySelectorAll(".side-brand .brand-mark, .brand-mark.small").forEach(m => { m.textContent = name.trim().charAt(0).toUpperCase() || "H"; });
   document.title = `${name} — Vehicle Inventory`;
 }
 async function saveSysSettings(map){
@@ -291,7 +290,8 @@ async function renderDataManage(){
   $("dmDel").onclick = () => { const vs = dmSelected(all); if(!vs.length) return toast("Select rows first.","error"); deleteVehicles(vs, renderDataManage); };
   $("dmEdit").onclick = () => { const vs = dmSelected(all); if(vs.length !== 1) return toast("Select exactly one row to edit.","error"); openVehicleEdit(vs[0], renderDataManage); };
   $("dmExp").onclick = () => { const t = DM_TABS[DM.tab], l = dmFiltered(all); if(!l.length) return toast("Nothing to export.","error");
-    exportSheet("data-" + DM.tab.toLowerCase(), t.cols.map(c => c.h), l.map(r => t.cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
+    const cols = hasPerm("value.view") ? t.cols : t.cols.filter(c => c.t !== "money");
+    exportSheet("data-" + DM.tab.toLowerCase(), cols.map(c => c.h), l.map(r => cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
   document.querySelectorAll("[data-reset]").forEach(b => b.addEventListener("click", () => openResetConfirm(DM_RESETS.find(x => x.k === b.dataset.reset), all)));
   drawDM(all);
 }

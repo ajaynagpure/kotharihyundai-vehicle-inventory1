@@ -7,8 +7,8 @@ const col = (h, k, t = "text") => ({h, k, t});
 
 const STOCK_COLS = [col("Total Vehicles","vehicle_count","num"), col("Free Stock","stock_count","num"), col("In Transit","in_transit_count","num"), col("Pending Order","pending_count","num"), col("Tally Done","bill_count","num"), col("Free Value","stock_value","money"), col("In Transit Value","in_transit_value","money")];
 const REPORTS = {
-  "location-report": {title:"Location wise Stock", source:"location_stock_report", totals:true, sort:["stock_count","desc"], dim:"location",
-    cols:[col("Location","location_name"), col("Free Stock","stock_count","num"), col("Tally Done","bill_count","num"), col("Free + Tally Done Value","total_value","money"), col("Delivered","delivered_count","num"), col("Delivered Purchase Value","delivered_value","money")]},
+  "location-report": {title:"Location wise Stock", source:"location_stock_report", totals:true, sort:["total_count","desc"], dim:"location",
+    cols:[col("Location","location_name"), col("Free Stock","stock_count","num"), col("Free Value","stock_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Total Count","total_count","num"), col("Grand Total Value","total_value","money")]},
   "model-report": {title:"Model Stock", source:"model_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"model",
     cols:[col("Model","model"), ...STOCK_COLS]},
   "finance-report": {title:"Finance wise Free Stock", source:"finance_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"finance",
@@ -23,6 +23,8 @@ const REPORTS = {
     cols:[col("Order No","order_no"), col("Order Date","order_date","date"), col("PIS No","pis_no"), col("Model","model"), col("Variant","variant"), col("Color","color"), col("Qty","quantity","num"), col("Status","status")]},
   "transit-report": {editable:true, title:"In Transit Report", source:"in_transit_report",
     cols:[col("Order No","order_no"), col("VIN No.","vin"), col("Engine No","engine_no"), col("Model","model"), col("Variant","variant"), col("Color","color"), col("Dealer","dealer_code"), col("Financier Name","finance_company"), col("HMI Invoice Date","hmi_invoice_date","date"), col("HMI Invoice No","hmi_invoice_no"), col("HMI Invoice Amount","hmi_invoice_amount","money")]},
+  "arriving-report": {title:"Arriving Vehicles — OUT, awaiting IN", source:"awaiting_arrival_report", sort:["movement_time","desc"],
+    cols:[col("OUT Date","movement_time","datetime"), col("VIN / Vehicle No.","vin"), col("Model","model"), col("Stock Status","status"), col("IN Location","in_location"), col("OUT Location","out_location"), col("Gate","gate_name")]},
   "gate-report": {title:"Gate Movement Report", source:"gate_movement_report", sort:["movement_time","desc"],
     cols:[col("Date","movement_time","datetime"), col("Type","movement_type"), col("VIN","vin"), col("From","from_location"), col("To","to_location"), col("Gate","gate_name")]}
 };
@@ -48,8 +50,15 @@ const PIE_COLORS = ["#0b63ce","#12b76a","#f79009","#7a5af8","#ee46bc","#06aed4",
 const dimNum = (n, dim, key, stage) => n ? raw(`<button type="button" class="link-num" data-dim="${dim}" data-key="${esc(key)}" data-stage="${stage}">${Number(n).toLocaleString("en-IN")}</button>`) : 0;
 const B = t => raw(`<b>${esc(String(t))}</b>`), N = t => B(Number(t).toLocaleString("en-IN")), MS = t => B(moneyShort(t));
 const dashboardFilters = () => ({from:$("dashDateFrom")?.value || "", to:$("dashDateTo")?.value || "", location:$("dashLocation")?.value || ""});
+function dashboardAssignedLocation(){
+  if(state.isAdmin) return null;
+  const id = state.profile?.location_id;
+  return id ? (state.locations || []).find(l => String(l.id) === String(id))?.location_name || "" : "";
+}
 function dashboardMatchesVehicle(v){
   const f = dashboardFilters(), loc = vLocName(v);
+  const assignedLocation = dashboardAssignedLocation();
+  if(assignedLocation !== null && (!assignedLocation || loc !== assignedLocation)) return false;
   if(f.location && loc !== f.location) return false;
   if(f.from || f.to){
     const stage = vStage(v), d = stage === "pending" ? (v.order_date || v.created_at) : stage === "delivered" ? (v.delivery_date || v.bill_date || v.purchase_date || v.hmi_invoice_date) : stage === "bill" ? (v.bill_date || v.hmi_invoice_date || v.purchase_date) : (v.purchase_date || v.hmi_invoice_date || v.order_date || v.created_at);
@@ -60,7 +69,7 @@ function dashboardMatchesVehicle(v){
 }
 
 function renderDashboard(){
-  const stats = [["Total Order Stock","stat0","total"],["Free Stock","stat1","stock"],["In Transit","stat2","transit"],["Pending Order","stat3","pending"],["Tally Done","stat4","bill"],["Delivered","stat5","delivered"]];
+  const stats = [["Total Order Stock","stat0","total"],["Free Stock","stat1","stock"],["In Transit","stat2","transit"],["Pending Order","stat3","pending"],["Tally Done","stat4","bill"],["Delivered","stat5","delivered"],["Arriving","stat7","arriving"]];
   const link = (page, label) => `<button class="secondary-btn" type="button" onclick="navigate('${page}')" ${can(page) ? "" : "hidden"}>${label}</button>`;
   $("content").innerHTML = `
   <div class="dashboard-page">
@@ -70,17 +79,19 @@ function renderDashboard(){
     <label class="dashboard-filter-field">LOCATION<select id="dashLocation"><option value="">All Locations</option></select></label>
   </div>
   <div class="cards dashboard-cards">
-    ${stats.map(([x,id,kind]) => `<button type="button" class="stat-card stat-card-button" data-stat="${kind}" title="Click to view vehicles"><div class="stat-title">${x}</div><div class="stat-value" id="${id}">0</div><div class="stat-money" id="${id}v">₹ 0</div><div class="stat-note">Click to view list ›</div></button>`).join("")}
+    ${stats.map(([x,id,kind]) => `<button type="button" class="stat-card stat-card-button${kind === "total" ? " total-stock-card" : ""}" data-stat="${kind}" title="Click to view vehicles">${kind === "total" ? `<div class="stat-title">${x}</div><div class="total-stock-chart"><div class="total-stock-visual"><svg id="totalStockPie" viewBox="0 0 180 192" role="img" aria-label="Total order stock breakdown"></svg><div class="total-stock-center"><div class="stat-value" id="${id}">0</div><div class="stat-money" id="${id}v">₹ 0</div></div></div><div id="totalStockLegend" class="total-stock-legend"></div></div>` : `<div class="stat-title">${x}</div><div class="stat-value" id="${id}">0</div><div class="stat-money" id="${id}v">₹ 0</div>`}</button>`).join("")}
   </div>
   <div class="panel"><div class="panel-head"><h3>Financier Name wise Stock</h3>${link("finance-report","View Report")}</div><div id="financeDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
-  <div class="grid-2">
-    <div class="panel"><div class="panel-head"><h3>Dealer code wise free stock</h3>${link("dealer-report","View Report")}</div><div id="dealerDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
-    <div class="panel status-panel"><div class="panel-head"><h3>Status wise stock</h3>${link("status","Open")}</div><div id="statusDash" class="pie-wrap">${emptyState("Loading...")}</div></div>
-  </div>
   <div class="panel"><div class="panel-head"><h3>Location wise stock</h3>${link("location-report","View Report")}</div><div id="locationTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
+  <div class="panel">
+    <div class="panel-head"><h3>Stock Ageing wise Free Stock</h3>${link("aging-report","Ageing Report")}</div>
+    <p id="ageNote" class="form-help"></p><div id="ageDash" class="age-cards">${emptyState("Loading...")}</div>
+    <div class="panel-head ageing-subhead"><h3>Model wise Free Stock &amp; Ageing</h3>${link("model-report","Model Report")}</div>
+    <div id="modelDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div>
+  </div>
+  <div class="panel"><div class="panel-head"><h3>Dealer Code wise Stock</h3>${link("dealer-report","View Report")}</div><div id="dealerDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   <div class="panel"><div class="panel-head"><h3>Delivered by Model and Location</h3>${link("delivery-report","View Report")}</div><div id="deliveredModelLocation" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
-  <div class="panel"><div class="panel-head"><h3>Stock Ageing — Free Stock</h3>${link("aging-report","View Report")}</div><p id="ageNote" class="form-help"></p><div id="ageDash" class="age-cards">${emptyState("Loading...")}</div></div>
-  <div class="panel"><div class="panel-head"><h3>Model wise free stock &amp; ageing</h3>${link("model-report","View Report")}</div><div id="modelDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
+  <div class="panel"><div class="panel-head"><h3>Arriving Vehicles — OUT, awaiting IN</h3>${link("arriving-report","View Report")}</div><div id="arrivingTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   <div class="panel"><div class="panel-head"><h3>Recent Vehicle Movements</h3>${link("gate-report","View All")}</div><div id="gateTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   </div>`;
   document.querySelectorAll(".stat-card-button").forEach(b => b.addEventListener("click", () => openStatModal(b.dataset.stat)));
@@ -95,27 +106,25 @@ async function getStatusSummary(){
   return Object.entries(groups).map(([status,v]) => ({status, ...v})).sort((a,b) => b.count - a.count);
 }
 
-function pieHtml(items){                   // donut chart (inline SVG) + clickable legend
-  const total = items.reduce((t, i) => t + i.count, 0); if(!total) return emptyState("No stock data yet. Import the Order / Purchase report to begin.");
-  const cx = 90, cy = 90, R = 84, r = 50; let a0 = -Math.PI / 2;
-  const shade = hex => "#" + [1,3,5].map(i => Math.round(parseInt(hex.slice(i,i+2),16) * .62).toString(16).padStart(2,"0")).join("");
-  const slices = items.map((it, i) => {
-    const fr = it.count / total, col = PIE_COLORS[i % PIE_COLORS.length], tip = `${it.status}: ${it.count} (${(fr*100).toFixed(1)}%)`;
-    let d;
-    if(fr >= 0.9999) d = `M${cx} ${cy-R} A${R} ${R} 0 1 1 ${cx-.01} ${cy-R} L${cx-.01} ${cy-r} A${r} ${r} 0 1 0 ${cx} ${cy-r} Z`;
-    else {
-      const a1 = a0 + fr * 2 * Math.PI, p = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(2)} ${(cy + rad * Math.sin(a)).toFixed(2)}`, big = fr > 0.5 ? 1 : 0;
-      d = `M${p(R,a0)} A${R} ${R} 0 ${big} 1 ${p(R,a1)} L${p(r,a1)} A${r} ${r} 0 ${big} 0 ${p(r,a0)} Z`;
-      a0 = a1;
-    }
-    return {
-      depth:`<path d="${d}" fill="${shade(col)}" stroke="${shade(col)}" stroke-width="1"/>`,
-      top:`<path d="${d}" fill="${col}" stroke="#fff" stroke-width="1.5" data-dim="status" data-key="${esc(it.status)}" data-stage="all" class="pie-slice"><title>${esc(tip)}</title></path>`
-    };
-  });
-  const depth = slices.map(s => s.depth).join(""), paths = slices.map(s => s.top).join("");
-  return `<div class="pie-box"><svg viewBox="0 0 180 192" class="pie-svg" role="img" aria-label="Status-wise stock: ${total.toLocaleString("en-IN")} vehicles"><circle class="pie-track" cx="90" cy="90" r="84"></circle><g class="pie-depth" transform="translate(0 10)" aria-hidden="true">${depth}</g>${paths}<circle class="pie-center" cx="90" cy="90" r="48"></circle><text x="90" y="86" text-anchor="middle" class="pie-total">${total.toLocaleString("en-IN")}</text><text x="90" y="103" text-anchor="middle" class="pie-sub">TOTAL VEHICLES</text></svg>
-    <div class="pie-legend">${items.map((it, i) => `<button type="button" class="pie-row" data-dim="status" data-key="${esc(it.status)}" data-stage="all"><i style="background:${PIE_COLORS[i % PIE_COLORS.length]}"></i><span class="pie-name">${esc(it.status)}</span><b>${it.count.toLocaleString("en-IN")}</b><em>${((it.count/total)*100).toFixed(1)}%</em><span class="pie-val">${moneyShort(it.value)}</span></button>`).join("")}</div></div>`;
+function totalStockPieHtml(items){
+  const total = items.reduce((n,item) => n + item.count, 0);
+  if(!total) return {svg:`<circle class="pie-track" cx="90" cy="90" r="72"></circle>`, legend:emptyState("No stock data yet.")};
+  const cx = 90, cy = 90, R = 82, r = 52;
+  let a0 = -Math.PI / 2;
+  const slices = items.map((item,i) => {
+    if(!item.count) return "";
+    const fraction = item.count / total, end = a0 + fraction * 2 * Math.PI;
+    const point = (radius, angle) => `${(cx + radius * Math.cos(angle)).toFixed(2)} ${(cy + radius * Math.sin(angle)).toFixed(2)}`;
+    const large = fraction > .5 ? 1 : 0;
+    const path = fraction >= .9999
+      ? `M${cx} ${cy-R} A${R} ${R} 0 1 1 ${cx-.01} ${cy-R} L${cx-.01} ${cy-r} A${r} ${r} 0 1 0 ${cx} ${cy-r} Z`
+      : `M${point(R,a0)} A${R} ${R} 0 ${large} 1 ${point(R,end)} L${point(r,end)} A${r} ${r} 0 ${large} 0 ${point(r,a0)} Z`;
+    a0 = end;
+    const color = PIE_COLORS[i % PIE_COLORS.length];
+    return `<path d="${path}" fill="${color}" stroke="#fff" stroke-width="1.5"><title>${esc(item.label)}: ${item.count.toLocaleString("en-IN")} (${((fraction)*100).toFixed(1)}%)</title></path>`;
+  }).join("");
+  const legend = items.map((item,i) => `<div class="total-stock-legend-row"><i style="background:${PIE_COLORS[i % PIE_COLORS.length]}"></i><span>${esc(item.label)}</span><b>${item.count.toLocaleString("en-IN")}</b><em>${total ? ((item.count/total)*100).toFixed(1) : "0.0"}%</em><small>${moneyShort(item.value)}</small></div>`).join("");
+  return {svg:`<circle class="pie-track" cx="90" cy="90" r="82"></circle>${slices}<circle class="pie-center" cx="90" cy="90" r="48"></circle>`,legend};
 }
 
 async function loadDashboardData(){
@@ -124,10 +133,25 @@ async function loadDashboardData(){
   await getLocations();
   const locationSelect = $("dashLocation");
   if(locationSelect && !locationSelect.dataset.ready){
-    locationSelect.innerHTML = `<option value="">All Locations</option>` + (state.locations || []).map(l => `<option value="${esc(l.location_name)}">${esc(l.location_name)}</option>`).join("");
+    const assignedLocation = dashboardAssignedLocation();
+    locationSelect.innerHTML = assignedLocation === null
+      ? `<option value="">All Locations</option>` + (state.locations || []).map(l => `<option value="${esc(l.location_name)}">${esc(l.location_name)}</option>`).join("")
+      : assignedLocation
+        ? `<option value="${esc(assignedLocation)}">${esc(assignedLocation)}</option>`
+        : `<option value="">Assigned location unavailable</option>`;
+    if(assignedLocation !== null){
+      locationSelect.value = assignedLocation;
+      locationSelect.disabled = true;
+    }
     locationSelect.dataset.ready = "true";
   }
-  const box = id => $(id), fail = msg => ["financeDash","dealerDash","statusDash","locationTable","deliveredModelLocation","ageDash","modelDash"].forEach(i => { if(box(i)) box(i).innerHTML = emptyState("Could not load: " + msg); });
+  const box = id => $(id), fail = msg => ["financeDash","dealerDash","locationTable","deliveredModelLocation","ageDash","modelDash","arrivingTable"].forEach(i => { if(box(i)) box(i).innerHTML = emptyState("Could not load: " + msg); });
+  if(dashboardAssignedLocation() === ""){
+    fail("No assigned location is available for this user. Contact Admin.");
+    ["stat0","stat1","stat2","stat3","stat4","stat5","stat7"].forEach(id => { if(box(id)) box(id).textContent = "—"; if(box(id + "v")) box(id + "v").textContent = "—"; });
+    if(box("totalStockLegend")) box("totalStockLegend").innerHTML = emptyState("No assigned location is available.");
+    return;
+  }
   if(allRes.error){ fail(allRes.error.message || allRes.error); }
   else {
     const all = allRes.data.filter(dashboardMatchesVehicle), sum = {total:{n:0, v:0}};
@@ -136,6 +160,9 @@ async function loadDashboardData(){
     all.forEach(v => { const st = vStage(v), a = vAmt(v); sum[st].n++; sum[st].v += a; if(st !== "delivered" && st !== "cancelled"){ sum.total.n++; sum.total.v += a; } });
     [["total","stat0"],["stock","stat1"],["transit","stat2"],["pending","stat3"],["bill","stat4"],["delivered","stat5"]].forEach(([k,id]) => {
       if(box(id)) box(id).textContent = sum[k].n.toLocaleString("en-IN"); if(box(id + "v")) box(id + "v").textContent = moneyShort(sum[k].v); });
+    const totalPie = totalStockPieHtml([["stock","Free Stock"],["transit","In Transit"],["pending","Pending Order"],["bill","Tally Done"]].map(([key,label]) => ({label,count:sum[key].n,value:sum[key].v})));
+    if(box("totalStockPie")) box("totalStockPie").innerHTML = totalPie.svg;
+    if(box("totalStockLegend")) box("totalStockLegend").innerHTML = totalPie.legend;
     const bindDim = el => el?.querySelectorAll("[data-dim]").forEach(b => b.addEventListener("click", () => openDimModal(b.dataset.dim, b.dataset.key, b.dataset.stage)));
     const draw = (id, headers, groups, mapper, footer) => { const el = box(id); if(!el) return;
       el.innerHTML = groups.length ? table(headers, groups.map(mapper), footer(groups)) : emptyState("No records found."); bindDim(el); };
@@ -144,9 +171,10 @@ async function loadDashboardData(){
     // 6. Finance wise stock: counts and combined value for Free Stock, In Transit and Tally Done
     const fin = stageGroup(all, DIMS.finance.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => (b.n.stock + b.n.transit + b.n.bill) - (a.n.stock + a.n.transit + a.n.bill));
     const financeTotalValue = g => g.v.stock + g.v.transit + g.v.bill;
-    draw("financeDash", ["Financier Name","Free Stock","Free Value","In Transit","In Transit Value","Tally Done","Tally Done Value","Grand Total Value"], fin,
-      g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"finance",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"finance",g.key,"bill"), moneyShort(g.v.bill), moneyShort(financeTotalValue(g))],
-      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), MS(gs.reduce((t,g) => t + financeTotalValue(g), 0))]);
+    const financeTotalCount = g => g.n.stock + g.n.transit + g.n.bill;
+    draw("financeDash", ["Financier\nName","Free\nStock","Free\nValue","In\nTransit","In\nTransit\nValue","Tally\nDone","Tally\nDone\nValue","Total\nCount","Grand\nTotal\nValue"], fin,
+      g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"finance",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"finance",g.key,"bill"), moneyShort(g.v.bill), dimNum(financeTotalCount(g),"finance",g.key,"stock-transit-bill"), moneyShort(financeTotalValue(g))],
+      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(gs.reduce((t,g) => t + financeTotalCount(g), 0)), MS(gs.reduce((t,g) => t + financeTotalValue(g), 0))]);
     // 7. Dealer code wise: available, in transit, bill / not delivered (count + short value)
     const dealerPriority = ["W2203","W2230","W2A08","W2281","W2283"], dealerRank = new Map(dealerPriority.map((name,i) => [name,i]));
     const dea = stageGroup(all, DIMS.dealer.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => {
@@ -154,16 +182,16 @@ async function loadDashboardData(){
       if(ai !== undefined || bi !== undefined) return (ai ?? Infinity) - (bi ?? Infinity);
       return b.n.stock - a.n.stock || b.n.transit - a.n.transit;
     });
-    draw("dealerDash", ["Dealer","Free Stock","Value","In Transit","Value","Tally Done","Value"], dea,
-      g => [g.key, dimNum(g.n.stock,"dealer",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"dealer",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"dealer",g.key,"bill"), moneyShort(g.v.bill)],
-      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill"))]);
-    // 9. Location wise stock: combined Free Stock + Tally Done count and value, plus Delivered count + purchase value
-    const loc = stageGroup(all, DIMS.location.of).filter(g => g.n.stock + g.n.bill + g.n.delivered).sort((a,b) => compareLocationNames(a.key,b.key));
-    const freeTallyCount = g => g.n.stock + g.n.bill;
-    const lv = g => g.v.stock + g.v.bill;
-    draw("locationTable", ["Location","Free + Tally Done Count","Value","Delivered","Value"], loc,
-      g => [g.key, dimNum(freeTallyCount(g),"location",g.key,"stock-bill"), moneyShort(lv(g)), dimNum(g.n.delivered,"location",g.key,"delivered"), moneyShort(g.v.delivered)],
-      gs => [B("Total"), N(gs.reduce((t,g) => t + freeTallyCount(g), 0)), MS(gs.reduce((t,g) => t + lv(g), 0)), N(tot(gs,"n","delivered")), MS(tot(gs,"v","delivered"))]);
+    draw("dealerDash", ["Dealer","Free Stock","Value","In Transit","Value","Tally Done","Value","Total Count","Grand Total Value"], dea,
+      g => [g.key, dimNum(g.n.stock,"dealer",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"dealer",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"dealer",g.key,"bill"), moneyShort(g.v.bill), dimNum(g.n.stock + g.n.transit + g.n.bill,"dealer",g.key,"stock-transit-bill"), moneyShort(g.v.stock + g.v.transit + g.v.bill)],
+      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(gs.reduce((t,g) => t + g.n.stock + g.n.transit + g.n.bill, 0)), MS(gs.reduce((t,g) => t + g.v.stock + g.v.transit + g.v.bill, 0))]);
+    // 9. Location wise available stock: Free Stock + Tally Done count and value
+    const loc = stageGroup(all, DIMS.location.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => compareLocationNames(a.key,b.key));
+    const locationTotalCount = g => g.n.stock + g.n.transit + g.n.bill;
+    const locationTotalValue = g => g.v.stock + g.v.transit + g.v.bill;
+    draw("locationTable", ["Location","Free Stock","Free Value","Tally Done","Tally Done Value","In Transit","In Transit Value","Total Count","Grand Total Value"], loc,
+      g => [g.key, dimNum(g.n.stock,"location",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.bill,"location",g.key,"bill"), moneyShort(g.v.bill), dimNum(g.n.transit,"location",g.key,"transit"), moneyShort(g.v.transit), dimNum(locationTotalCount(g),"location",g.key,"stock-transit-bill"), moneyShort(locationTotalValue(g))],
+      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(gs.reduce((t,g) => t + locationTotalCount(g), 0)), MS(gs.reduce((t,g) => t + locationTotalValue(g), 0))]);
 
     const deliveredGroups = new Map();
     all.filter(v => vStage(v) === "delivered").forEach(v => {
@@ -175,10 +203,6 @@ async function loadDashboardData(){
     draw("deliveredModelLocation", ["Model","Location","Delivered","Purchase Value"], deliveredByModelLocation,
       g => [g.model,g.location,g.count,moneyShort(g.value)],
       gs => [B("Total"),"",N(gs.reduce((t,g) => t + g.count, 0)),MS(gs.reduce((t,g) => t + g.value, 0))]);
-
-    // 8. Status wise stock: pie chart
-    const st = {}; all.forEach(v => { const k = v.status || "UNKNOWN"; (st[k] ??= {status:k, count:0, value:0}); st[k].count++; st[k].value += vAmt(v); });
-    if(box("statusDash")){ box("statusDash").innerHTML = pieHtml(Object.values(st).sort((a,b) => b.count - a.count)); bindDim(box("statusDash")); }
 
     // Ageing = Free Stock only (In Transit, Tally Done, Pending Order and Delivered are not aged)
     const ageRows = ageInfo(all), names = ageBucketNames(), buckets = [...names, ...(ageRows.some(a => a.b === AGE_NODATE) ? [AGE_NODATE] : [])];
@@ -195,22 +219,34 @@ async function loadDashboardData(){
     const ageBy = {}; ageRows.forEach(a => { const m = DIMS.model.of(a.v), o = ((ageBy[m] ??= {})[a.b] ??= {n:0, v:0}); o.n++; o.v += vAmt(a.v); });
     const mod = stageGroup(all, DIMS.model.of).filter(g => g.n.stock).sort((a,b) => b.n.stock - a.n.stock);
     if(box("modelDash")){
-      const bCell = (m, bk) => { const o = ageBy[m]?.[bk]; return o ? `<td class="num"><button type="button" class="link-num" data-age-m="${esc(m)}" data-age-b="${esc(bk)}">${nf(o.n)}</button></td><td class="num">${moneyShort(o.v)}</td>` : `<td class="num">0</td><td class="num">-</td>`; };
-      const bTot = bk => { const l = ageRows.filter(a => a.b === bk); return `<td class="num"><b>${nf(l.length)}</b></td><td class="num"><b>${moneyShort(l.reduce((t,a) => t + vAmt(a.v), 0))}</b></td>`; };
-      box("modelDash").innerHTML = mod.length ? `<table class="age-table"><thead><tr><th rowspan="2">Model</th><th rowspan="2">Free Stock</th><th rowspan="2">Stock Value</th>${buckets.map(b => `<th colspan="2" class="grp">${esc(b)}</th>`).join("")}</tr>
-        <tr>${buckets.map(() => "<th>Qty</th><th>Value</th>").join("")}</tr></thead><tbody>${mod.map(g => `<tr><td>${esc(g.key)}</td><td class="num">${cell(dimNum(g.n.stock,"model",g.key,"stock"))}</td><td class="num">${moneyShort(g.v.stock)}</td>${buckets.map(bk => bCell(g.key, bk)).join("")}</tr>`).join("")}</tbody>
+      const bCell = (m, bk) => { const o = ageBy[m]?.[bk]; return `<td class="num"><div class="age-cell">${o ? `<button type="button" class="link-num" data-age-m="${esc(m)}" data-age-b="${esc(bk)}">${nf(o.n)}</button><span>${moneyShort(o.v)}</span>` : `<span>0</span><span>-</span>`}</div></td>`; };
+      const bTot = bk => { const l = ageRows.filter(a => a.b === bk); return `<td class="num"><div class="age-cell"><b>${nf(l.length)}</b><b>${moneyShort(l.reduce((t,a) => t + vAmt(a.v), 0))}</b></div></td>`; };
+      box("modelDash").innerHTML = mod.length ? `<table class="age-table"><thead><tr><th>Model</th><th>Free Stock</th><th>Stock Value</th>${buckets.map(b => `<th class="grp">${esc(b)}<span class="age-head-sub">Qty / Value</span></th>`).join("")}</tr></thead>
+        <tbody>${mod.map(g => `<tr><td>${esc(g.key)}</td><td class="num">${cell(dimNum(g.n.stock,"model",g.key,"stock"))}</td><td class="num">${moneyShort(g.v.stock)}</td>${buckets.map(bk => bCell(g.key, bk)).join("")}</tr>`).join("")}</tbody>
         <tfoot><tr><td><b>Total</b></td><td class="num"><b>${nf(tot(mod,"n","stock"))}</b></td><td class="num"><b>${moneyShort(tot(mod,"v","stock"))}</b></td>${buckets.map(bTot).join("")}</tr></tfoot></table>` : emptyState("No free stock yet.");
       bindDim(box("modelDash"));
       box("modelDash").querySelectorAll("[data-age-m]").forEach(b => b.addEventListener("click", () => openAgeModal(b.dataset.ageM, b.dataset.ageB)));
     }
   }
   const rows = Math.max(1, parseInt(state.settings?.sys?.dashboard_recent_rows, 10) || 8);
-  const f = dashboardFilters(), movements = (gate.data || []).filter(r => {
+  const f = dashboardFilters(), allMovements = gate.data || [], movements = allMovements.filter(r => {
     const day = String(r.movement_time || "").slice(0,10), loc = r.to_location || r.from_location || "";
     return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || loc === f.location);
   });
+  const arriving = allRes.error ? [] : dashboardArrivingRows(allRes.data, allMovements);
+  if(box("stat7")) box("stat7").textContent = allRes.error || gate.error ? "—" : arriving.length.toLocaleString("en-IN");
+  if(box("stat7v")) box("stat7v").textContent = allRes.error || gate.error ? "—" : moneyShort(arriving.reduce((total,r) => total + vValue(r), 0));
+  if(box("arrivingTable") && !allRes.error) box("arrivingTable").innerHTML = gate.error ? emptyState("Could not load: " + (gate.error.message || gate.error)) :
+    arriving.length ? table(["OUT Date","VIN / Vehicle No.","Model","Stock Status","IN Location","OUT Location","Gate"], arriving.map(r => [fmtDT(r.movement_time), r.vin || r.vehicle_no, r.model, r.status, r.in_location, r.out_location, r.gate_name])) : emptyState("No vehicles are awaiting arrival.");
   if(box("gateTable")) box("gateTable").innerHTML = gate.error ? emptyState("Could not load: " + (gate.error.message || gate.error)) :
     table(["Date","Type","VIN No.","Location"], movements.slice(0, rows).map(r => [fmtDT(r.movement_time), r.movement_type, r.vin, r.to_location || r.from_location]));
+}
+function dashboardArrivingRows(vehicles, movements){
+  const f = dashboardFilters();
+  return awaitingArrivalRows(vehicles, movements).filter(r => {
+    const day = String(r.movement_time || "").slice(0,10), loc = r.from_location || r.location_name || "";
+    return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || loc === f.location);
+  });
 }
 
 /* ------------------------------------------- Dashboard: click-through windows + ageing */
@@ -246,7 +282,8 @@ function currentStatusColumns(rows, selectedStatus){
       if(withoutSales || !withSales) groups.push(DASH_PURCHASE_COLS);
     }
   });
-  return [...new Map(groups.flat().map(c => [c.k,c])).values()];
+  const columns = [...new Map(groups.flat().map(c => [c.k,c])).values()];
+  return [col("Status","status"), col("Location","location_name"), ...columns.filter(c => !["status","location_name"].includes(c.k))];
 }
 const DASH_KIND = {
   total:{title:"Total Order Stock — Available + Pending Order + In Transit + Tally Done", f:v => !["delivered","cancelled"].includes(vStage(v))},
@@ -257,22 +294,29 @@ const DASH_KIND = {
   delivered:{title:"Delivered", f:v => vStage(v) === "delivered"}
 };
 async function openStatModal(kind){
-  const def = DASH_KIND[kind]; if(!def) return;
+  const def = DASH_KIND[kind]; if(!def && kind !== "arriving") return;
   if(!state.supabase){ toast("Connect Supabase first.","error"); return; }
   try {
     const all = await allVehicles(); await getLocations();
+    if(kind === "arriving"){
+      const arrivals = dashboardArrivingRows(all, await computedRows("gate_movement_report"));
+      openVehicleModal("Arriving Vehicles — OUT, awaiting IN", arrivals,
+        [col("OUT Date","movement_time","datetime"),col("VIN","vin"),col("Model","model"),col("Stock Status","status"),col("IN Location","in_location"),col("OUT Location","out_location"),col("Value","stock_value","money")],
+        "arriving", [], () => openStatModal("arriving"));
+      return;
+    }
     const rows = all.filter(def.f).filter(dashboardMatchesVehicle).map(vRow);
     // Total Order Stock window: stage-wise breakdown so the totals reconcile (order → delivery)
     const chips = kind === "total" ? STAGES.filter(([k]) => k !== "delivered").map(([k,label]) => { const l = rows.filter(r => vStage(r) === k); return `<span class="dm-chip dm-stage">${label}: <b>${l.length.toLocaleString("en-IN")}</b> · ${moneyShort(l.reduce((t,r) => t + vAmt(r), 0))}</span>`; }) : [];
     openVehicleModal(def.title, rows, dashboardModalCols(kind,rows), kind, chips, () => openStatModal(kind));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
-const STAGE_TITLE = {stock:"Free Stock", transit:"In Transit", bill:"Tally Done", "stock-bill":"Free Stock + Tally Done", delivered:"Delivered", pending:"Pending Order", all:"All vehicles"};
+const STAGE_TITLE = {stock:"Free Stock", transit:"In Transit", bill:"Tally Done", "stock-bill":"Available Stock", "stock-transit-bill":"Free Stock + In Transit + Tally Done", delivered:"Delivered", pending:"Pending Order", all:"All vehicles"};
 async function openDimModal(dim, key, stage){          // click on a count in a dashboard table / pie
   const d = DIMS[dim]; if(!d) return;
   try {
     const all = await allVehicles(); await getLocations();
-    const rows = all.filter(v => d.of(v) === key && (stage === "all" || (stage === "stock-bill" ? ["stock","bill"].includes(vStage(v)) : vStage(v) === stage))).map(vRow);
+    const rows = all.filter(v => d.of(v) === key && (stage === "all" || (stage === "stock-bill" ? ["stock","bill"].includes(vStage(v)) : stage === "stock-transit-bill" ? ["stock","transit","bill"].includes(vStage(v)) : vStage(v) === stage))).map(vRow);
     openVehicleModal(`${d.label}: ${key} — ${STAGE_TITLE[stage] || stage}`, rows, dashboardModalCols(stage,rows), "dashboard-" + dim, [], () => openDimModal(dim, key, stage));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
@@ -286,12 +330,13 @@ async function openAgeModal(model, bucket){
 // Window with a filterable, paged vehicle list, summary totals, a Total row and Excel export.
 function openVehicleModal(title, rows, cols, fileKey, chips = [], reopen = null){
   const sums = cols.filter(c => c.t === "money"), canEdit = state.isAdmin && rows.some(r => r.id);
+  const stageFilter = fileKey === "total" ? `<label>Status<select id="dmStageFilter"><option value="">All statuses</option><option value="stock">Free Stock</option><option value="transit">In Transit</option><option value="pending">Pending Order</option><option value="bill">Tally Done</option></select></label>` : "";
   openModal(`<div class="modal-bg" id="dmBg"><div class="modal wide" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     <div class="panel-head"><h3>${esc(title)}</h3><div class="report-tools">${filterBtn("dmFilterBox")}<button class="secondary-btn" type="button" id="dmExport">⤓ Export</button><button class="icon-btn" type="button" id="modalClose" aria-label="Close">×</button></div></div>
-    ${filterPanel("dmFilterBox", `<div class="filter-grid"><label>Search rows<input id="dmFilter" type="search" placeholder="VIN, model, order no…" aria-label="Filter rows"></label></div>`)}
+    ${filterPanel("dmFilterBox", `<div class="filter-grid">${stageFilter}<label>Search rows<input id="dmFilter" type="search" placeholder="VIN, model, order no…" aria-label="Filter rows"></label></div>`)}
     <div id="dmSummary" class="dm-summary"></div><div id="dmTable" class="table-wrap"></div></div></div>`);
-  const shown = () => { const q = ($("dmFilter").value || "").trim().toLowerCase();
-    return q ? rows.filter(r => cols.some(c => String(fmtCell(c.t === "days" ? "num" : c.t, r[c.k]) ?? "").toLowerCase().includes(q))) : rows; };
+  const shown = () => { const q = ($("dmFilter").value || "").trim().toLowerCase(), stage = $("dmStageFilter")?.value || "";
+    return rows.filter(r => (!stage || vStage(r) === stage) && (!q || cols.some(c => String(fmtCell(c.t === "days" ? "num" : c.t, r[c.k]) ?? "").toLowerCase().includes(q)))); };
   const draw = () => {
     const list = shown(), tot = c => list.reduce((t, r) => t + Number(r[c.k] || 0), 0);
     $("dmSummary").innerHTML = `<span class="dm-chip"><b>${list.length.toLocaleString("en-IN")}</b> vehicles</span>` + sums.map(c => `<span class="dm-chip">${esc(c.h)}: <b>${money(tot(c))}</b></span>`).join("") + (list.length === rows.length ? chips.join("") : "");
@@ -305,8 +350,10 @@ function openVehicleModal(title, rows, cols, fileKey, chips = [], reopen = null)
   document.addEventListener("keydown", onKey);
   $("modalClose").onclick = shut; $("dmBg").addEventListener("mousedown", e => { if(e.target.id === "dmBg") shut(); });
   $("dmFilter").addEventListener("input", draw);
+  $("dmStageFilter")?.addEventListener("change", draw);
   $("dmExport").onclick = () => { const l = shown(); if(!l.length){ toast("Nothing to export.","error"); return; }
-    exportSheet("dashboard-" + fileKey, cols.map(c => c.h), l.map(r => cols.map(c => (c.t === "money" || c.t === "num" || c.t === "days") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
+    const exportCols = hasPerm("value.view") ? cols : cols.filter(c => c.t !== "money");
+    exportSheet("dashboard-" + fileKey, exportCols.map(c => c.h), l.map(r => exportCols.map(c => (c.t === "money" || c.t === "num" || c.t === "days") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
   draw();
 }
 
@@ -315,21 +362,27 @@ const VEH = {page:0, size:50, total:0, q:"", status:"", pageType:"vehicles", row
 
 async function renderVehicles(page){
   VEH.page = 0; VEH.q = ""; VEH.status = ""; VEH.pageType = page; VEH.size = pageSize();
+  const useStatusButtons = ["status","vehicles"].includes(page);
   $("content").innerHTML = `
   <div class="toolbar">
-    <div class="searchbox">
+    <div class="searchbox${page === "search" ? " vehicle-searchbox" : ""}">
       <input id="vehicleSearch" placeholder="Search VIN / order no / engine / model / color" autocomplete="off" aria-label="Search vehicles">
+      ${page === "search" ? `<button type="button" id="vehicleScan" class="secondary-btn" title="Scan VIN / chassis barcode">📷 Scan</button>` : ""}
       <button type="button" id="vehicleSearchBtn">Search</button>
     </div>
-    <div class="toolbar-actions">${page === "status" ? "" : filterBtn("vehFilter")}<button class="secondary-btn" type="button" id="vehicleExport">⤓ Export</button></div>
+    <div class="toolbar-actions">${useStatusButtons ? "" : filterBtn("vehFilter")}<button class="secondary-btn" type="button" id="vehicleExport">⤓ Export</button></div>
   </div>
-  ${page === "status" ? `<div class="status-filter-bar" id="vehicleStatusButtons"><button type="button" class="tab-btn status-filter-btn active" data-status="">All status</button></div>` : filterPanel("vehFilter", `<div class="filter-grid"><label>Status<select id="vehicleStatus" aria-label="Filter by status"><option value="">All status</option></select></label></div>`)}
+  ${useStatusButtons ? `<div class="status-filter-bar" id="vehicleStatusButtons"><button type="button" class="tab-btn status-filter-btn active" data-status="">All status</button></div>` : filterPanel("vehFilter", `<div class="filter-grid"><label>Status<select id="vehicleStatus" aria-label="Filter by status"><option value="">All status</option></select></label></div>`)}
   <div class="panel"><div class="table-wrap" id="vehicleResults">${emptyState(page === "search" ? "Enter a VIN / chassis / model to search." : "Loading vehicles...")}</div><div class="pager" id="vehiclePager"></div></div>
   <div id="modal"></div>`;
 
-  const run = () => { VEH.q = cleanQuery($("vehicleSearch").value); if(page !== "status") VEH.status = $("vehicleStatus").value; VEH.page = 0; queryVehicles(); };
+  const run = () => { VEH.q = cleanQuery($("vehicleSearch").value); if(!useStatusButtons) VEH.status = $("vehicleStatus").value; VEH.page = 0; queryVehicles(); };
   $("vehicleSearchBtn").addEventListener("click", run);
   $("vehicleSearch").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); run(); } });
+  $("vehicleScan")?.addEventListener("click", () => openScanner(v => {
+    $("vehicleSearch").value = v;
+    run();
+  }));
   $("vehicleStatus")?.addEventListener("change", run);
   $("vehicleExport").addEventListener("click", exportVehicles);
 
@@ -368,8 +421,8 @@ async function queryVehicles(){
     const cols = currentStatusColumns(VEH.rows, VEH.status);
     box.innerHTML = table([...cols.map(c => c.h), ""], VEH.rows.map(v => [...cols.map(c => c.k === "status" ? statusBadge(v.status) : fmtCell(c.t, c.k === "location_name" ? vLocName(v) : v[c.k])), actions(v)]));
   } else {
-    box.innerHTML = table(["Order No","VIN No.","Engine No","Model","Variant","Color","Dealer","Financier Name","HMI Invoice Date","Status","Order Status","Stock Value",""],
-      VEH.rows.map(v => [v.order_no, raw(`<b class="mono">${esc(v.vin)}</b>`), v.engine_no, v.model, v.variant, v.color, v.dealer_code, v.finance_company, fmtD(v.hmi_invoice_date ?? v.purchase_date), statusBadge(v.status), v.order_status, money(v.stock_value), actions(v)]));
+    box.innerHTML = table(["Order No","VIN No.","Engine No","Model","Variant","Color","Dealer","Financier Name","HMI Invoice Date","Status","Location","Order Status","Stock Value",""],
+      VEH.rows.map(v => [v.order_no, raw(`<b class="mono">${esc(v.vin)}</b>`), v.engine_no, v.model, v.variant, v.color, v.dealer_code, v.finance_company, fmtD(v.hmi_invoice_date ?? v.purchase_date), statusBadge(v.status), vLocName(v), v.order_status, money(v.stock_value), actions(v)]));
   }
   box.querySelectorAll("[data-vid]").forEach(b => b.addEventListener("click", () => showVehicleDetails(b.dataset.vid)));
   const rowOf = id => VEH.rows.find(x => String(x.id) === String(id));
@@ -389,7 +442,8 @@ const VEHICLE_EXPORT_COLS = [...EXCEL_FIELDS.map(f => f[0]), "chassis_no", "stoc
 function vehicleCellValue(k, v){ const x = v[k]; return isBlank(x) ? "" : (FIELD_TYPE[k] === "money" || FIELD_TYPE[k] === "num") ? Number(x) : x; }
 function exportVehicles(){
   if(!VEH.rows.length){ toast("Nothing to export — search or load vehicles first.","error"); return; }
-  exportSheet("vehicle-stock", VEHICLE_EXPORT_COLS.map(k => FIELD_HEADING[k]), VEH.rows.map(v => VEHICLE_EXPORT_COLS.map(k => vehicleCellValue(k, v))));
+  const cols = hasPerm("value.view") ? VEHICLE_EXPORT_COLS : VEHICLE_EXPORT_COLS.filter(k => FIELD_TYPE[k] !== "money");
+  exportSheet("vehicle-stock", cols.map(k => FIELD_HEADING[k]), VEH.rows.map(v => cols.map(k => vehicleCellValue(k, v))));
 }
 function showVehicleDetails(id){
   const v = VEH.rows.find(x => String(x.id) === String(id)); if(v) openVehicleDetails(v);
@@ -428,7 +482,7 @@ function reportRows(def, rows, filter){
   const f = filter.trim().toLowerCase();
   return f ? rows.filter(r => def.cols.some(c => String(r[c.k] ?? "").toLowerCase().includes(f))) : rows;
 }
-const REPORT_STAGE = {stock_count:"stock", in_transit_count:"transit", pending_count:"pending", bill_count:"bill", delivered_count:"delivered", vehicle_count:"all"};
+const REPORT_STAGE = {available_count:"stock-bill", stock_count:"stock", in_transit_count:"transit", pending_count:"pending", bill_count:"bill", delivered_count:"delivered", vehicle_count:"all", total_count:"stock-transit-bill"};
 function drawReport(){
   const def = REPORTS[REPORT.key]; if(!def || !$("reportTable")) return;
   const rows = reportRows(def, REPORT.rows, $("reportFilter")?.value || ""), edit = def.editable && state.isAdmin;
@@ -464,7 +518,8 @@ async function renderReport(page){
   $("reportExport").addEventListener("click", () => {
     const rows = reportRows(def, REPORT.rows, $("reportFilter").value);
     if(!rows.length){ toast("Nothing to export.","error"); return; }
-    exportSheet(page, def.cols.map(c => c.h), rows.map(r => def.cols.map(c => (c.t === "num" || c.t === "money") ? Number(r[c.k] || 0) : (r[c.k] ?? ""))));
+    const cols = hasPerm("value.view") ? def.cols : def.cols.filter(c => c.t !== "money");
+    exportSheet(page, cols.map(c => c.h), rows.map(r => cols.map(c => (c.t === "num" || c.t === "money") ? Number(r[c.k] || 0) : (r[c.k] ?? ""))));
   });
   await loadReport(page);
 }

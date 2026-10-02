@@ -22,25 +22,39 @@
 </head>
 <body>
   <div id="loginView" class="login-view">
-    <div class="login-card">
-      <div class="brand-mark">H</div>
-      <h1>KOTHARI HYUNDAI</h1>
-      <p>Vehicle Inventory Management System</p>
-      <form id="loginForm">
-        <label>Username</label>
-        <input id="username" type="text" placeholder="Enter username" autocomplete="username" required>
-        <label>Password</label>
-        <div class="password-field"><input id="password" type="password" placeholder="Enter password" autocomplete="current-password" required><button type="button" class="password-eye" data-password-toggle="password" aria-label="Show password" title="Show password">👁</button></div>
-        <button class="primary-btn" type="submit">Login</button>
-      </form>
-      <div id="loginMessage" class="message"></div>
-      <small>Authorized users only</small>
+    <div class="login-layout">
+      <section class="login-showcase" aria-label="Digital Vehicle Tracking System">
+        <img class="login-showcase-logo" src="assets/kothari-hyundai-watermark.png" alt="Kothari Hyundai logo">
+        <h2>Digital Vehicle<br>Tracking System</h2>
+        <span class="login-accent"></span>
+        <p>Track inventory movements and get a clear view of your vehicle stock.</p>
+        <div class="login-features">
+          <div><span>↗</span><b>Vehicle Tracking</b></div>
+          <div><span>▥</span><b>Live Stock</b></div>
+          <div><span>⌖</span><b>Location Management</b></div>
+          <div><span>▤</span><b>Reports &amp; Analytics</b></div>
+        </div>
+      </section>
+      <div class="login-card">
+        <div class="login-brand"><img class="brand-logo login-brand-logo" src="assets/kothari-hyundai-watermark.png" alt="Kothari Hyundai logo"></div>
+        <h1>Welcome Back</h1>
+        <p>Digital Vehicle Tracking System</p>
+        <form id="loginForm">
+          <label for="username">Username</label>
+          <input id="username" type="text" placeholder="Enter username" autocomplete="username" required>
+          <label for="password">Password</label>
+          <div class="password-field"><input id="password" type="password" placeholder="Enter password" autocomplete="current-password" required><button type="button" class="password-eye" data-password-toggle="password" aria-label="Show password" title="Show password">👁</button></div>
+          <button class="primary-btn" type="submit">Login <span aria-hidden="true">→</span></button>
+        </form>
+        <div id="loginMessage" class="message"></div>
+        <div class="login-secure"><span aria-hidden="true">✓</span> Authorized users only</div>
+      </div>
     </div>
   </div>
   <div id="appView" class="app hidden">
     <aside class="sidebar">
       <div class="side-brand">
-        <div class="brand-mark small">H</div>
+        <img class="brand-logo" src="assets/kothari-hyundai-watermark.png" alt="Kothari Hyundai logo">
         <div><strong>KOTHARI HYUNDAI</strong><span>Vehicle Inventory</span></div>
       </div>
       <nav id="nav"></nav>
