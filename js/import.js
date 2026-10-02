@@ -9,7 +9,7 @@ const IMPORT_TYPES = {
   "purchase-import": {key:"PURCHASE", status:"In Transit",    title:"Purchase Report Import"},
   "sales-import":    {key:"SALES",    status:"Tally Done", title:"Sales Report Import"}
 };
-const STATUS_MOVABLE = ["", "pending order", "in transit"];   // purchase import never pulls later stages back
+const STATUS_MOVABLE = ["", "pending order", "in transit", "cancelled order"];   // purchase import never pulls later stages back
 const SQL_HINT = "Database columns are missing. Run IMPORT_COLUMNS_FIX.sql once in Supabase SQL Editor, then import again.";
 let importRows = [];
 const importDropped = new Set();                              // columns the database does not have (skipped safely)
@@ -59,6 +59,7 @@ function importPayload(r, kind, status){
     if(r.hmi_invoice_date) p.purchase_date = r.hmi_invoice_date;
   } else if(r.order_amount !== undefined) p.stock_value = r.order_amount;
   if(status) p.status = status;
+  if(!state.isAdmin && state.profile?.location_id) p.location_id = state.profile.location_id;
   return p;
 }
 const importChunks = (arr, n) => { const out = []; for(let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
@@ -67,6 +68,7 @@ const importSalesOnly = r => Object.fromEntries(Object.entries(r).filter(([k]) =
 const importHasPurchase = v => !!v && (!isBlank(v.hmi_invoice_no) || !isBlank(v.hmi_invoice_date) || !isBlank(v.purchase_date));   // VIN is in the Purchase report
 let importIgnored = [];
 const importIsInvoiced = r => String(r.order_status || "").toLowerCase() === "invoiced" && (typeof sysBool !== "function" || sysBool("imp_order_invoiced_to_transit"));
+const importIsCancelled = r => /cancel/i.test(String(r.order_status || ""));
 function importDedupe(rows, keyOf){ const m = new Map(); rows.forEach((r, i) => m.set(keyOf(r) || "row" + i, r)); return [...m.values()]; }
 
 /* ---- Safe writes: a column the database lacks is skipped (and reported), never a hard error ---- */
@@ -108,9 +110,9 @@ async function renderImport(page){
   if(page === "import-data") return renderImportedData();
   const t = IMPORT_TYPES[page]; importRows = [];
   const rule = {
-    ORDER: "File: <b>SaleDealerOrderStatus.xlsx</b>. Status <b>Ordered / Allocated</b> → <b>Pending Order</b>. <b>Invoiced</b> rows are added as <b>In Transit</b> (HMI invoice already raised). If the vehicle already exists (e.g. from the Purchase Report) its order details are filled in and its status is not changed.",
+    ORDER: "File: <b>SaleDealerOrderStatus.xlsx</b>. <b>Ordered / Allocated</b> rows are added as <b>Pending Order</b>; <b>Invoiced</b> rows can be added as <b>In Transit</b>. <b>Cancelled Order</b> rows are imported with a separate status and are not counted in Pending Order or stock.",
     PURCHASE: "File: <b>VehicleDeliveryStatusReport.xlsx</b>. Imported as <b>In Transit</b>. If the <b>Order No</b> (or VIN) exists as Pending Order it moves to In Transit. In Stock / Delivered vehicles keep their status.",
-    SALES: "Columns: <b>Tally Invoice Date, Vin No., Engine No, Customer Name, Tally Invoice No, Tally Location, Model, Variant, Color, Total Invoice value</b>. Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b> (those columns in the file are ignored). Only rows whose <b>VIN exists in the Purchase report</b> are imported and moved to <b>Tally Done</b>. Rows whose VIN is not in the Purchase report are <b>ignored</b>. They become <b>Delivered</b> when the Delivery Entry is saved. Vehicles that are already Delivered are left as they are."
+    SALES: "Columns: <b>Tally Invoice Date, Vin No., Engine No, Customer Name, Tally Invoice No, Tally Location, Model, Variant, Color, Total Invoice value</b>. Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b>. Matching VINs update their Sales details; Delivered vehicles stay Delivered. Rows whose VIN is not in the Purchase report are ignored."
   }[t.key];
   $("content").innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>${esc(t.title)}</h3></div>
     <p class="form-help">${rule}</p>
@@ -132,26 +134,30 @@ async function importPreviewFile(page){
   const unmapped = raw.length ? Object.keys(raw[0]).filter(h => !IMPORT_HEADER_MAP.has(importNorm(h)) && importNorm(h) !== "s no" && importNorm(h) !== "no") : [];
   const bad = importRows.filter(r => !key(r)).length;
   let info = `${importRows.length} rows read.`;
-  if(t.key === "ORDER"){ const inv = importRows.filter(importIsInvoiced).length; info += ` ${importRows.length - inv} → Pending Order, ${inv} Invoiced → In Transit.`; }
+  if(t.key === "ORDER"){
+    const cancelled = importRows.filter(importIsCancelled).length, inv = importRows.filter(r => !importIsCancelled(r) && importIsInvoiced(r)).length;
+    info += ` ${importRows.length - cancelled - inv} → Pending Order, ${inv} Invoiced → In Transit, ${cancelled} Cancelled Order → separate status (not Pending Order).`;
+  }
   let ex = null;
   try {
     ex = await importFetchExisting(importRows); const hit = importRows.filter(r => importFind(ex, r)).length;
-    if(t.key === "SALES"){ const ok = importRows.filter(r => importHasPurchase(ex.byVin.get(r.vin))).length; info += ` ${ok} VIN found in Purchase report → will be imported (Tally Done). ${importRows.length - ok} VIN not in Purchase report → will be IGNORED.`; }
+    if(t.key === "SALES"){ const ok = importRows.filter(r => importHasPurchase(ex.byVin.get(r.vin))).length; info += ` ${ok} VIN found in Purchase report → Sales details will update. ${importRows.length - ok} VIN not in Purchase report → will be IGNORED.`; }
     else info += t.key === "PURCHASE" ? ` ${hit} match existing stock, ${importRows.length - hit} new.` : ` ${hit} already in system.`;
   } catch(err){ info += " " + (importMissingColumn(err) ? SQL_HINT : "(Could not check existing stock: " + (err.message || err) + ")"); }
   if(bad) info += ` ${bad} rows have no ${t.key === "ORDER" ? "Order No" : "VIN"} and will be skipped.`;
   if(unmapped.length) info += ` Ignored columns: ${unmapped.join(", ")}.`;
   msg.textContent = info; msg.className = "message" + (bad ? " error" : " success");
-  const cols = ["order_no","vin","engine_no","model","variant","color","dealer_code","finance_company","hmi_invoice_date","order_status","stock_value"];
+  const orderCols = ["order_date","order_no","pis_no","model","variant","color","order_amount","order_type","assigned_date","confirm_date","vin","order_status","customer_id","customer_name"];
+  const purchaseCols = ["main_dealer","dealer_code","hmi_invoice_date","hmi_invoice_no","excise_invoice_no","order_date","order_no","model","variant","color","vin","fsc","variant_code","engine_no","finance_company","departure_date","lot_number","transporter_name","transporter_vehicle_no","basic_price","freight_insurance","total_invoice_value","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","hmi_invoice_amount","hsn_code","emission_type","quantity","grn_no","grn_date","sale_tax","fob_key"];
   const salesCols = ["bill_date","vin","engine_no","customer_name","bill_no","sales_location","model","variant","color","total_invoice_value"];
-  const shown = t.key === "SALES" ? salesCols : cols;
+  const shown = t.key === "SALES" ? salesCols : t.key === "PURCHASE" ? purchaseCols : orderCols;
   const matchHead = t.key === "SALES" ? ["Purchase match","After import"] : [];
   $("importPreviewBox").innerHTML = table([...shown.map(c => FIELD_HEADING[c]), ...matchHead], importRows.slice(0, t.key === "SALES" ? 50 : 15).map(r => [...shown.map(c => {
     if(c === "stock_value") return r.hmi_invoice_amount ?? r.order_amount;
     if(t.key === "SALES" && !SALES_KEEP.includes(c)){ const p = ex?.byVin.get(r.vin); return p ? (c === "total_invoice_value" ? (p.total_invoice_value ?? p.hmi_invoice_amount) : p[c]) : ""; }   // fetched from Purchase report
     return r[c];
   }), ...(t.key === "SALES" ? (() => { const p = ex?.byVin.get(r.vin), ok = importHasPurchase(p);
-      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (unchanged)" : "Tally Done"]; })() : [])]));
+      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (status kept)" : "Tally Done"]; })() : [])]));
   $("importGo").disabled = !importRows.length;
 }
 async function importInsertRows(rows, res){
@@ -166,22 +172,23 @@ async function importInsertRows(rows, res){
   }
 }
 async function importRunRows(key, rows){
-  const sb = state.supabase, res = {added:0, updated:0, moved:0, skipped:0, invoiced:0, failed:0, ignored:0, firstError:""};
-  if(key === "SALES"){                                       // matched VIN -> Tally Done (Delivered stays Delivered)
+  const sb = state.supabase, res = {added:0, updated:0, moved:0, skipped:0, deliveredUpdated:0, invoiced:0, cancelled:0, failed:0, ignored:0, firstError:""};
+  if(key === "SALES"){                                       // matched VIN -> Sales details; Delivered status stays Delivered
     const ex = await importFetchExisting(rows), now = new Date().toISOString();
     for(const r of rows.map(importSalesOnly)){
       if(!r.vin){ res.failed++; res.firstError ||= "VIN missing"; continue; }
       const cur = ex.byVin.get(r.vin);
       if(!importHasPurchase(cur)){ res.ignored++; importIgnored.push(r.vin); continue; }   // not in Purchase report -> ignore
-      if(vStage(cur) === "delivered"){ res.skipped++; continue; }
-      const patch = {status: IMPORT_TYPES["sales-import"].status, sales_imported_at: now};
+      const delivered = vStage(cur) === "delivered";
+      const patch = {sales_imported_at: now};
+      if(!delivered) patch.status = IMPORT_TYPES["sales-import"].status;
       // Sales report always carries the bill details (latest report wins)
       ["customer_name","bill_date","bill_no","sales_location"].forEach(k => { if(r[k] !== undefined && r[k] !== "") patch[k] = r[k]; });
       // Engine No / Model / Variant / Color / Total Invoice value stay as per the Purchase report (not taken from the Sales file)
       const x = await importWrite(b => sb.from("vehicles").update(b).eq("id", cur.id).select("id"), patch);
       if(x.error){ res.failed++; res.firstError ||= x.error.message; }
       else if(!x.data?.length){ res.failed++; res.firstError ||= "Not saved — no permission to update vehicles (" + r.vin + ")"; }
-      else res.updated++;
+      else { res.updated++; if(delivered) res.deliveredUpdated++; }
     }
     return res;
   }
@@ -190,10 +197,13 @@ async function importRunRows(key, rows){
     for(const r of rows){
       if(!r.order_no){ res.failed++; res.firstError ||= "Order No missing"; continue; }
       const cur = importFind(ex, r);
-      if(cur){                                                  // fill order details, never touch status / invoice value
-        const patch = importPayload(r, "ORDER", ""); delete patch.stock_value; delete patch.purchase_date;
+      if(cur){
+        const curStage = vStage(cur), nextStatus = importIsCancelled(r) ? (["pending","cancelled"].includes(curStage) ? "Cancelled Order" : "") : curStage === "cancelled" ? (importIsInvoiced(r) ? "In Transit" : "Pending Order") : "";
+        const patch = importPayload(r, "ORDER", nextStatus); delete patch.stock_value; delete patch.purchase_date;
+        if(nextStatus === "Cancelled Order") res.cancelled++;
         updates.push({id:cur.id, patch, moved:false}); continue;
       }
+      if(importIsCancelled(r)){ res.cancelled++; fresh.push(importPayload(r, "ORDER", "Cancelled Order")); continue; }
       if(importIsInvoiced(r)){ res.invoiced++; fresh.push(importPayload(r, "ORDER", "In Transit")); continue; }   // already invoiced by HMI
       fresh.push(importPayload(r, "ORDER", "Pending Order"));
     }
@@ -225,8 +235,8 @@ async function importRun(page){
   if(typeof VCACHE !== "undefined") VCACHE.rows = null;
   const bits = [`${res.added} added`];
   if(t.key === "PURCHASE") bits.push(`${res.updated} updated (${res.moved} moved Pending Order → In Transit)`);
-  if(t.key === "ORDER") bits.push(`${res.updated} existing filled`, `${res.invoiced} of the added rows were Invoiced (In Transit)`);
-  if(t.key === "SALES") bits.push(`${res.updated} marked Tally Done`, `${res.skipped} already Delivered (unchanged)`, `${res.ignored} ignored (VIN not in Purchase report)`);
+  if(t.key === "ORDER") bits.push(`${res.updated} existing filled`, `${res.invoiced} of the added rows were Invoiced (In Transit)`, `${res.cancelled} marked Cancelled Order (not Pending Order)`);
+  if(t.key === "SALES") bits.push(`${res.updated} VIN details updated`, `${res.deliveredUpdated} Delivered status kept`, `${res.ignored} ignored (VIN not in Purchase report)`);
   bits.push(`${res.failed} failed`);
   let text = bits.join(", ") + ".";
   if(res.firstError) text += ` First error: ${res.firstError}` + (importMissingColumn({message:res.firstError}) ? ` — ${SQL_HINT}` : "");
@@ -243,10 +253,22 @@ async function importRun(page){
   toast(`${t.title}: ${res.added + res.updated} ok, ${res.failed} failed`, res.failed ? "error" : "success");
 }
 async function renderImportHistory(){
-  $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Import History</h3></div><div id="importHistory" class="table-wrap"></div></div>`;
+  $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Import History</h3>${state.isAdmin ? `<button class="secondary-btn danger" type="button" id="clearImportHistory">Clear History</button>` : ""}</div><div id="importHistory" class="table-wrap"></div></div>`;
   const r = await state.supabase.from("import_batches").select("*").order("created_at",{ascending:false}).limit(100);
   $("importHistory").innerHTML = r.error ? emptyState("No import history yet.") :
     table(["Date","Type","File","Rows","Success","Failed","Status"], (r.data||[]).map(x => [fmtDT(x.created_at),x.import_type,x.file_name,x.total_rows,x.successful_rows,x.failed_rows,x.status]));
+  const clear = $("clearImportHistory");
+  if(clear){
+    clear.disabled = !!r.error || !(r.data || []).length;
+    clear.addEventListener("click", async () => {
+      if(!confirm("Clear import history logs only? Imported vehicles and their statuses will not be changed.")) return;
+      clear.disabled = true; clear.textContent = "Clearing…";
+      const del = await state.supabase.from("import_batches").delete().not("id","is",null).select("id");
+      if(del.error){ toast("Could not clear import history: " + del.error.message,"error"); clear.disabled = false; clear.textContent = "Clear History"; return; }
+      toast(`Import history cleared (${(del.data || []).length} log${(del.data || []).length === 1 ? "" : "s"}).`,"success");
+      renderImportHistory();
+    });
+  }
 }
 
 /* ---------------------------------------------------------------------------------------------

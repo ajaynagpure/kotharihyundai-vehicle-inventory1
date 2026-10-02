@@ -2,19 +2,19 @@
 /* =====================================================================
    DELIVERY: Delivery Entry (auto-fill by VIN, every field editable / manual) |
              Delivered Vehicles + Delivery History (date / location filter, Excel export, edit, delete)
-   Auto-fill: Engine No, Model, Variant, Colour, Finance Name  <- Purchase report
-              Customer Name, Bill Inv No, TL, SC, Bill Location <- Sales report
+  Auto-fill: Engine No, Model, Variant, Colour, Finance Name  <- Purchase report
+          Customer Name, Bill Inv No, Bill Location <- Sales report
    ===================================================================== */
 const DEL = {vehicle:null, rows:[], from:"", to:"", loc:"", q:""};
 // [key, label, input type, source hint]
 const DEL_FIELDS = [
   ["engine_no","ENGINE NO","text","Purchase report"], ["model","MODEL","text","Purchase report"], ["variant","VARIANT","text","Purchase report"],
   ["color","COLOUR","text","Purchase report"], ["finance_company","FINANCE NAME","text","Purchase report"], ["customer_name","CUSTOMER NAME","text","Sales report"],
-  ["bill_no","TALLY INVOICE NO","text","Sales report"], ["team_leader","TL","text","Sales report"], ["executive","SC","text","Sales report"]
+  ["bill_no","TALLY INVOICE NO","text","Sales report"]
 ];
 const DEL_COLS = [
   ["Delivery Date","delivery_date","date"],["VIN No.","vin"],["Engine No","engine_no"],["Model","model"],["Variant","variant"],["Colour","color"],
-  ["Customer Name","customer_name"],["Tally Invoice No","bill_no"],["TL","team_leader"],["SC","executive"],["Financier Name","finance_company"],["Delivery Location","dloc"]
+  ["Customer Name","customer_name"],["Tally Invoice No","bill_no"],["Financier Name","finance_company"],["Delivery Location","dloc"]
 ];
 const delClean = v => { const t = String(v ?? "").trim(); return t === "" ? null : t; };
 const delVin = v => String(v || "").replace(/\s+/g, "").toUpperCase();
@@ -46,7 +46,7 @@ async function renderDelivery(page){
   if(page !== "delivery-entry") return renderDeliveryList(page, titles[page]);
   await getLocations(); DEL.vehicle = null;
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Delivery Entry</h3></div>
-  <p class="form-help">Enter the VIN and press <b>Fetch</b> (or Enter): Engine No, Model, Variant, Colour, Finance Name come from the <b>Purchase report</b>; Customer Name, Tally Invoice No, TL, SC from the <b>Sales report</b>. Every field can be changed or typed manually.</p>
+  <p class="form-help">Enter the VIN and press <b>Fetch</b> (or Enter): Engine No, Model, Variant, Colour, Finance Name come from the <b>Purchase report</b>; Customer Name, Tally Invoice No from the <b>Sales report</b>. Every field can be changed or typed manually.</p>
   <form id="deliveryForm" class="form-grid">
     <div class="full"><label for="d_vin">VIN *</label><div class="searchbox" style="max-width:none"><input id="d_vin" name="vin" required autocomplete="off" placeholder="VIN or last 6 digits"><button type="button" id="d_fetch">Fetch</button></div><div id="d_info" class="form-help"></div></div>
     ${DEL_FIELDS.map(([k, l, , h]) => delInput(k, l, "", h)).join("")}
@@ -80,7 +80,7 @@ function delVehiclePatch(f, clear){
   });
   return p;
 }
-const delRowPayload = (f, vehicleId) => { const p = {vehicle_id:vehicleId}; ["delivery_date","customer_name","finance_company","delivery_location","engine_no","model","variant","color","bill_no","team_leader","executive"].forEach(k => { if(f[k] !== null && f[k] !== undefined) p[k] = f[k]; }); return p; };
+const delRowPayload = (f, vehicleId) => { const p = {vehicle_id:vehicleId}; ["delivery_date","customer_name","finance_company","delivery_location","engine_no","model","variant","color","bill_no"].forEach(k => { if(f[k] !== null && f[k] !== undefined) p[k] = f[k]; }); return p; };
 
 async function saveDelivery(e){
   e.preventDefault();
@@ -122,13 +122,12 @@ function delFiltered(){
 async function renderDeliveryList(page, title){
   DEL.from = DEL.to = DEL.loc = DEL.q = "";
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>${esc(title)}</h3>
-    <div class="report-tools">${filterBtn("delFilter")}<button class="secondary-btn" type="button" id="delExport">⤓ Export to Excel</button><button class="secondary-btn" type="button" id="deliveryRefresh">↻ Refresh</button></div></div>
+    <div class="report-tools">${filterBtn("delFilter")}<button class="secondary-btn" type="button" id="delExport">⤓ Export to Excel</button></div></div>
     ${filterPanel("delFilter", `<div class="filter-grid"><label>From date<input id="delFrom" type="date"></label><label>To date<input id="delTo" type="date"></label>
       <label>Delivery location<select id="delLoc"><option value="">All locations</option></select></label>
       <label>Search<input id="delQ" type="search" placeholder="VIN, customer, model, bill no…"></label></div>
       <div class="form-actions"><button class="secondary-btn" type="button" id="delClear">Clear filter</button></div>`, true)}
     <p id="delMeta" class="form-help"></p><div id="deliveryResults">${emptyState("Loading...")}</div></div>`;
-  $("deliveryRefresh").addEventListener("click", loadDeliveries);
   await loadDeliveries();
 }
 async function loadDeliveries(){
@@ -138,7 +137,7 @@ async function loadDeliveries(){
     DEL.rows = all.filter(v => vStage(v) === "delivered")
       .map(v => ({...v, dno:v.delivery_no || v.grn_no || "", dloc:v.delivery_location || (v.location_id ? locName(v.location_id) : "")}))
       .sort((a, b) => String(b.delivery_date || "").localeCompare(String(a.delivery_date || "")));
-    const locs = [...new Set([...(state.locations || []).map(l => l.location_name), ...DEL.rows.map(v => v.dloc).filter(Boolean)])].sort();
+    const locs = sortLocationNames(new Set([...(state.locations || []).map(l => l.location_name), ...DEL.rows.map(v => v.dloc).filter(Boolean)]));
     $("delLoc").innerHTML = `<option value="">All locations</option>` + locs.map(n => `<option ${n === DEL.loc ? "selected" : ""}>${esc(n)}</option>`).join("");
     const pg = mountPaged(box, {headers:[...DEL_COLS.map(c => c[0]), ""], empty:"No delivered vehicles for this filter.",
       rows:() => delFiltered().map(v => [...DEL_COLS.map(c => c[1] === "vin" ? raw(`<b class="mono">${esc(v.vin)}</b>`) : delCell(v, c)),
@@ -181,7 +180,7 @@ async function delEdit(id){
     const up = await importWrite(b => sb.from("vehicles").update(b).eq("id", v.id).select("id"), delVehiclePatch(f, true));
     if(up.error) return toast(up.error.message, "error");
     if(!up.data?.length) return toast("Not saved — no permission to edit.", "error");
-    const payload = delRowPayload(f, v.id); ["delivery_date","customer_name","finance_company","delivery_location","engine_no","model","variant","color","bill_no","team_leader","executive"].forEach(k => { if(!(k in payload)) payload[k] = null; });
+    const payload = delRowPayload(f, v.id); ["delivery_date","customer_name","finance_company","delivery_location","engine_no","model","variant","color","bill_no"].forEach(k => { if(!(k in payload)) payload[k] = null; });
     delete payload.vehicle_id;
     const has = (await sb.from("deliveries").select("vehicle_id").eq("vehicle_id", v.id).limit(1)).data?.length;
     const x = has ? await importWrite(b => sb.from("deliveries").update(b).eq("vehicle_id", v.id), payload)

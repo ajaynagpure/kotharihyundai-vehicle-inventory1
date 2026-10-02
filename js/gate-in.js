@@ -6,12 +6,14 @@
 const GATE_BUCKET = "gate-photos";
 const IN_PHOTOS = [["photo_front","1. Vehicle Front Photo"],["photo_chassis_no","2. Vehicle Chassis No. Photo"],["photo_chassis_plate","3. Vehicle Chassis Plate Photo"],
   ["photo_form22","4. FORM 22 Photo"],["photo_cng_cert","5. Vehicle CNG Certificate Photo"],["photo_cng_kit","6. Vehicle CNG Kit Photo"]];
+const IN_REQUIRED_PHOTOS = IN_PHOTOS.slice(0,4);
 const inCount = x => IN_PHOTOS.filter(([k]) => x && x[k]).length;
 const inPhotoPaths = x => IN_PHOTOS.map(([k]) => x?.[k]).filter(Boolean);
+const missingInPhotos = d => IN_REQUIRED_PHOTOS.filter(([k]) => !d?.files?.[k]).map(([,label]) => label);
 
 function inBlockHtml(p){
   return `<div id="${p}Block" class="gate-in-block"><div class="gate-in-title">Vehicle IN Details</div><div class="gate-in-grid">
-    ${IN_PHOTOS.map(([k,l]) => `<div class="gate-field"><label>${l}</label><input type="file" accept="image/*" id="${p}_${k}" class="in-file"><small id="${p}_${k}_n" class="in-note"></small></div>`).join("")}
+    ${IN_PHOTOS.map(([k,l],i) => `<div class="gate-field"><label>${l}${i < 4 ? ' <span>*</span>' : ""}</label><input type="file" accept="image/*" id="${p}_${k}" class="in-file"${p === "gi" && i < 4 ? " required" : ""}><small id="${p}_${k}_n" class="in-note"></small></div>`).join("")}
     ${[1,2,3,4].map(n => `<div class="gate-field"><label>7. TYRE SERIAL NO. ${n}</label><input id="${p}_tyre${n}" autocomplete="off" placeholder="Tyre ${n} serial no."></div>`).join("")}
     <div class="gate-field"><label>8. EV BATTERY NO.</label><input id="${p}_ev" autocomplete="off" placeholder="Battery no."></div></div></div>`;
 }
@@ -30,11 +32,11 @@ function setIn(p, d){
 function resetGateIn(){
   document.querySelectorAll("#giBlock .in-note").forEach(n => { n.textContent = ""; });
   const b = document.getElementById("giBlock"), m = document.getElementById("gateMovementType");
-  if(b && m) b.hidden = m.value !== "IN";
+  if(b && m){ b.hidden = m.value !== "IN"; IN_REQUIRED_PHOTOS.forEach(([k]) => { const f=document.getElementById(`gi_${k}`); if(f) f.required=m.value === "IN"; }); }
 }
 function bindGateIn(){
   const m = document.getElementById("gateMovementType"); if(!m) return;
-  m.addEventListener("change", () => { const b = document.getElementById("giBlock"); if(b) b.hidden = m.value !== "IN"; });
+  m.addEventListener("change", resetGateIn);
 }
 document.addEventListener("change", e => {          // show chosen file name under every photo input
   const t = e.target; if(!t.classList?.contains("in-file")) return;

@@ -4,9 +4,13 @@
    ===================================================================== */
 
 const GATE_HELP = "";
-const GATE_COLS_ALL = ["#","Date","Movement","Location","VIN Number","Engine No.","Variant","Color","Finance Bank","Reason","Driver","Remarks"];
+const GATE_COLS_ALL = ["Date","Sr No","Movement","Location","VIN Number","Engine No.","Variant","Color","Finance Bank","Reason","Driver","Remarks"];
+const GATE_RECENT_COLS_ALL = GATE_COLS_ALL.filter(c => c !== "Sr No");
 // Bhilarwadi has no driver details; Branch and the register keep them.
-const gateCols = gate => gate === "Bhilarwadi" ? GATE_COLS_ALL.filter(c => c !== "Driver") : GATE_COLS_ALL;
+const gateCols = (gate, includeSerial = true) => {
+  const cols = includeSerial ? GATE_COLS_ALL : GATE_RECENT_COLS_ALL;
+  return gate === "Bhilarwadi" ? cols.filter(c => c !== "Driver") : cols;
+};
 const GATE_COLS = GATE_COLS_ALL;
 
 // Location dropdown: all active locations (Bhilarwadi always present). blankLabel => adds an empty first option.
@@ -47,10 +51,9 @@ async function renderGate(page){
         <div class="gate-field"><label for="gateMovementType">MOVEMENT <span>*</span></label><select name="movement_type" id="gateMovementType" required><option value="IN">IN</option><option value="OUT">OUT</option></select></div>
         <div class="gate-field"><label for="gateReason">REASON <span>*</span></label><select name="movement_reason" id="gateReason" required><option value="NEW VEHICLE">NEW VEHICLE</option></select></div>
         <div class="gate-field"><label for="gateReceiptDate">RECEIPT DATE <span>*</span></label><input name="receipt_dt" id="gateReceiptDate" type="date" required></div>
-        ${showDriver ? `<div class="gate-field"><label for="gateDriver">DRIVER NAME</label><input name="driver_name" id="gateDriver" autocomplete="off"></div>
-        <div class="gate-field"><label for="gateDriverMobile">DRIVER MOBILE</label><input name="driver_mobile" id="gateDriverMobile" inputmode="tel" autocomplete="off"></div>` : ""}
+        ${showDriver ? `<div class="gate-field"><label for="gateDriver">DRIVER NAME</label><input name="driver_name" id="gateDriver" autocomplete="off"></div>` : ""}
         <div class="gate-field gate-remarks-field"><label for="gateRemarks">REMARKS</label><textarea name="remarks" id="gateRemarks" placeholder="Enter remarks"></textarea></div>
-        <div class="gate-field gate-pass-field"><label for="gatePassFile">GATE PASS (PHOTO)</label><input type="file" accept="image/*" id="gatePassFile" class="in-file"><small id="gatePassFile_n" class="in-note"></small></div>
+        <div class="gate-field gate-pass-field"><label for="gatePassFile">GATE PASS (PHOTO)${gateName === "Branch" ? ' <span>*</span>' : ""}</label><input type="file" accept="image/*" id="gatePassFile" class="in-file" ${gateName === "Branch" ? "required" : ""}><small id="gatePassFile_n" class="in-note"></small></div>
         ${gateName === "Bhilarwadi" ? `<div class="gate-in-wrap">${inBlockHtml("gi")}</div>` : ""}
         <div class="gate-form-actions"><span id="purchaseLookupMsg" class="form-help">${GATE_HELP}</span><div class="gate-action-buttons"><button class="secondary-btn" type="button" id="gateClear">↻ Clear</button><button class="primary-btn" type="submit" id="gateSave">▣ Save Gate Movement</button></div></div>
       </form></div>
@@ -163,7 +166,7 @@ async function saveGate(e){
     const nn = v => { const t = String(v ?? "").trim(); return t === "" ? null : t; };
     const payload = {vehicle_id:vehicleId, vin:finalVin, location_name:nn(f.location_name), engine_no:nn(f.engine_no), variant:nn(f.variant), color:nn(f.color),
       finance_bank:nn(f.finance_bank), movement_type:f.movement_type, movement_reason:f.movement_reason, receipt_dt:nn(f.receipt_dt),
-      remarks:nn(f.remarks), gate_name:nn(f.gate_name), driver_name:nn(f.driver_name), driver_mobile:nn(f.driver_mobile)};
+      remarks:nn(f.remarks), gate_name:nn(f.gate_name), driver_name:nn(f.driver_name)};
     if(f.gate_name === "Bhilarwadi" && f.movement_type === "IN"){
       btn.textContent = "Uploading photos…";
       try { Object.assign(payload, await inExtras(finalVin, payload.receipt_dt, readIn("gi"))); }
@@ -208,14 +211,14 @@ async function fetchGateRows(limit = 100, gate = ""){
     vin: x.vin || v.vin, vehicle_no: x.vehicle_no || v.vehicle_no, engine_no: x.engine_no || v.engine_no,
     variant: x.variant || v.variant, color: x.color || v.color, finance_bank: x.finance_bank || v.finance_company}; });
 }
-function gatePlainRow(x, i, gate = ""){
-  const row = [i + 1, fmtD(x.receipt_dt || x.created_at), x.movement_type, gateLocOf(x), x.vin, x.engine_no, x.variant, x.color, x.finance_bank, x.movement_reason,
+function gatePlainRow(x, i, gate = "", includeSerial = true){
+  const row = [fmtD(x.receipt_dt || x.created_at), ...(includeSerial ? [i + 1] : []), x.movement_type, gateLocOf(x), x.vin, x.engine_no, x.variant, x.color, x.finance_bank, x.movement_reason,
     [x.driver_name, x.driver_mobile].filter(Boolean).join(" / "), x.remarks];
-  return gate === "Bhilarwadi" ? row.filter((_, k) => k !== 10) : row;
+  return gate === "Bhilarwadi" ? row.filter((_, k) => k !== (includeSerial ? 10 : 9)) : row;
 }
 function exportGateRows(){
   if(!GATE_ROWS.length){ toast("Nothing to export.","error"); return; }
-  const g = GATE_GATE || ""; exportSheet("gate-movements", gateCols(g), GATE_ROWS.map((x,i) => gatePlainRow(x, i, g)));
+  const g = GATE_GATE || ""; exportSheet("gate-movements", gateCols(g,false), GATE_ROWS.map((x,i) => gatePlainRow(x, i, g, false)));
 }
 
 /* ---- In-Out Register ------------------------------------------------------------ */

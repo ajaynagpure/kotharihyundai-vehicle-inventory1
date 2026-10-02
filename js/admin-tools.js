@@ -262,7 +262,7 @@ const DM_TABS = {
     cols:[col("Delivery No","delivery_no"),col("Delivery Date","delivery_date","date"),col("VIN No.","vin"),col("Model","model"),col("Customer","customer_name"),col("Financier Name","finance_company"),col("Status","status")]}
 };
 const DM_RESETS = [
-  {k:"order", title:"Reset Order data", desc:"Deletes all vehicles still at Pending Order.", count:a => a.filter(v => vStage(v) === "pending").length},
+  {k:"order", title:"Reset Order data", desc:"Deletes all vehicles still at Pending Order or marked Cancelled Order.", count:a => a.filter(v => ["pending","cancelled"].includes(vStage(v))).length},
   {k:"purchase", title:"Reset Purchase data", desc:"Deletes all In Transit and Free Stock vehicles.", count:a => a.filter(v => ["transit","stock"].includes(vStage(v))).length},
   {k:"sales", title:"Reset Sales data", desc:"Deletes all Tally Done and Delivered vehicles.", count:a => a.filter(v => ["bill","delivered"].includes(vStage(v))).length},
   {k:"gate", title:"Reset Gate movements", desc:"Deletes every Bhilarwadi / Branch In-Out entry and its IN photos.", table:"gate_movements"},

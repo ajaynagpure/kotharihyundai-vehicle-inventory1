@@ -522,6 +522,6 @@ function table(headers, rows){
 function escHtml(v){return typeof v==="string" && v.includes("<") ? v : esc(v);}
 function emptyState(text){return `<div class="empty-state"><div class="empty-icon">⌁</div><p>${esc(text)}</p></div>`;}
 function money(v){return "₹ "+Number(v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});}
-function date(v){return v?new Date(v).toLocaleString("en-IN",{dateStyle:"medium",timeStyle:"short"}):"-";}
+function date(v){if(!v)return "-";const d=new Date(v);if(isNaN(d))return "-";return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}, ${d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",hour12:true})}`;}
 
 document.addEventListener("DOMContentLoaded",init);

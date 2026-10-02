@@ -23,15 +23,24 @@ function pagerHtml(total, page, size){
  *          size, empty, onDraw(el, pageRows, offset) }   Returns {draw(), reset()} */
 function mountPaged(el, cfg){
   let page = 0;
+  let sortIndex = -1, sortDirection = 1;
   const size = cfg.size || pageSize();
   const draw = () => {
     if(!el.isConnected) return;
-    const rows = typeof cfg.rows === "function" ? cfg.rows() : cfg.rows;
+    const allRows = typeof cfg.rows === "function" ? cfg.rows() : cfg.rows;
+    const rows = sortIndex < 0 ? allRows : [...allRows].map((row,i) => ({row,i})).sort((a,b) => compareTableValues(a.row[sortIndex],b.row[sortIndex],cfg.headers[sortIndex],sortDirection) || a.i-b.i).map(x => x.row);
     const pages = Math.max(1, Math.ceil(rows.length / size)); page = Math.min(page, pages - 1);
     const slice = rows.slice(page * size, page * size + size);
     if(!rows.length){ el.innerHTML = emptyState(cfg.empty || "No records found."); cfg.onDraw?.(el, [], 0); return; }
     const foot = cfg.footer ? (typeof cfg.footer === "function" ? cfg.footer(rows) : cfg.footer) : null;
     el.innerHTML = `<div class="table-scroll">${table(cfg.headers, slice, foot)}</div>${pagerHtml(rows.length, page, size)}`;
+    const tableEl = el.querySelector("table");
+    if(tableEl){
+      tableEl.querySelectorAll("thead th").forEach(th => {
+        if(Number(th.dataset.sortIndex) === sortIndex && sortIndex >= 0){ th.dataset.sortDirection = sortDirection > 0 ? "asc" : "desc"; th.setAttribute("aria-sort", sortDirection > 0 ? "ascending" : "descending"); }
+      });
+      PAGED_TABLE_SORT.set(tableEl, {setSort(index,direction){ sortIndex=index; sortDirection=direction; page=0; draw(); }});
+    }
     el.querySelector('[data-pg="prev"]').onclick = () => { page--; draw(); };
     el.querySelector('[data-pg="next"]').onclick = () => { page++; draw(); };
     cfg.onDraw?.(el, slice, page * size);

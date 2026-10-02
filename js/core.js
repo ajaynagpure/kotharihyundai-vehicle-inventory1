@@ -97,9 +97,64 @@ function cell(v){ return v instanceof Raw ? v.html : (isBlank(v) ? "-" : esc(v))
 function table(headers, rows, footer){
   if(!rows.length) return emptyState("No records found.");
   const foot = footer ? `<tfoot><tr>${footer.map(c => `<td>${cell(c)}</td>`).join("")}</tr></tfoot>` : "";
-  return `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${
+  return `<table><thead><tr>${headers.map((h,i) => `<th scope="col" ${String(h).trim() && !["✓","Edit","Action"].includes(String(h).trim()) ? `data-sort-index="${i}" tabindex="0" aria-sort="none"` : ""}>${esc(h)}</th>`).join("")}</tr></thead><tbody>${
     rows.map(r => `<tr>${r.map(c => `<td>${cell(c)}</td>`).join("")}</tr>`).join("")}</tbody>${foot}</table>`;
 }
+const PAGED_TABLE_SORT = new WeakMap();
+const tableSortCollator = new Intl.Collator("en", {numeric:true, sensitivity:"base"});
+function tableSortText(value){
+  if(value instanceof Raw){ const t = document.createElement("template"); t.innerHTML = value.html; return t.content.textContent.trim(); }
+  return String(value ?? "").trim();
+}
+function tableSortValue(value, heading){
+  const text = tableSortText(value);
+  if(!text || text === "-") return {type:0, value:""};
+  if(/date|time/i.test(heading)){
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,\s*(\d{1,2}):(\d{2})\s*(am|pm))?$/i.exec(text);
+    if(m){ let hour = Number(m[4] || 0); const period = (m[6] || "").toLowerCase();
+      if(period === "pm" && hour < 12) hour += 12; if(period === "am" && hour === 12) hour = 0;
+      const d = new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),hour,Number(m[5] || 0));
+      if(d.getFullYear() === Number(m[3]) && d.getMonth() === Number(m[2])-1 && d.getDate() === Number(m[1])) return {type:1, value:d.getTime()}; }
+    const d = Date.parse(text); if(!Number.isNaN(d)) return {type:1, value:d};
+  }
+  const m = /^(-?\d+(?:\.\d+)?)\s*(Cr|L|K)?%?$/i.exec(text.replace(/[₹,\s]/g,""));
+  if(m){ const scale = {cr:1e7,l:1e5,k:1e3}; return {type:2, value:Number(m[1]) * (scale[(m[2] || "").toLowerCase()] || 1)}; }
+  return {type:3, value:text};
+}
+function compareTableValues(a,b,heading,direction){
+  const x = tableSortValue(a,heading), y = tableSortValue(b,heading);
+  if(x.type !== y.type) return (x.type - y.type) * direction;
+  const cmp = x.type === 3 ? tableSortCollator.compare(x.value,y.value) : x.value < y.value ? -1 : x.value > y.value ? 1 : 0;
+  return cmp * direction;
+}
+function tableHeaderIndex(th){
+  const explicit = Number(th.dataset.sortIndex); if(th.dataset.sortIndex !== undefined && Number.isInteger(explicit)) return explicit;
+  const head = th.closest("thead"); if(!head) return th.cellIndex;
+  const occupied = [];
+  for(let r=0;r<head.rows.length;r++){
+    occupied[r] ||= []; let c=0;
+    for(const cell of head.rows[r].cells){
+      while(occupied[r][c]) c++;
+      const start=c, rs=cell.rowSpan || 1, cs=cell.colSpan || 1;
+      for(let rr=r;rr<Math.min(head.rows.length,r+rs);rr++){ occupied[rr] ||= []; for(let cc=start;cc<start+cs;cc++) occupied[rr][cc]=true; }
+      if(cell === th) return start;
+      c += cs;
+    }
+  }
+  return th.cellIndex;
+}
+function sortTableByHeader(th){
+  const tableEl = th.closest("table"), heading = th.textContent.trim(); if(!tableEl || !heading || ["✓","edit","action"].includes(heading.toLowerCase())) return;
+  const index = tableHeaderIndex(th), direction = th.dataset.sortDirection === "asc" ? "desc" : "asc", sign = direction === "asc" ? 1 : -1;
+  tableEl.querySelectorAll("thead th").forEach(h => { h.removeAttribute("data-sort-direction"); h.setAttribute("aria-sort","none"); });
+  th.dataset.sortIndex = String(index); th.dataset.sortDirection = direction; th.setAttribute("aria-sort", direction === "asc" ? "ascending" : "descending");
+  const paged = PAGED_TABLE_SORT.get(tableEl);
+  if(paged){ paged.setSort(index, sign); return; }
+  const body = tableEl.tBodies[0]; if(!body) return;
+  [...body.rows].map((row,i) => ({row,i})).sort((a,b) => compareTableValues(a.row.cells[index]?.textContent,b.row.cells[index]?.textContent,heading,sign) || a.i-b.i).forEach(x => body.appendChild(x.row));
+}
+document.addEventListener("click", e => { const th=e.target.closest?.("th"); if(th) sortTableByHeader(th); });
+document.addEventListener("keydown", e => { const th=e.target.closest?.("th"); if(th && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); sortTableByHeader(th); } });
 function emptyState(text){ return `<div class="empty-state"><div class="empty-icon">⌁</div><p>${esc(text)}</p></div>`; }
 // Short Indian format for dashboard cards: 22,06,743.96 -> ₹ 22.07 L, 1,25,00,000 -> ₹ 1.25 Cr
 function moneyShort(v){
@@ -108,12 +163,16 @@ function moneyShort(v){
   return `${s}₹ ${Math.round(a).toLocaleString("en-IN")}`;
 }
 function money(v){ return "₹ " + Number(v || 0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function fmtDT(v){ return v ? new Date(v).toLocaleString("en-IN",{dateStyle:"medium",timeStyle:"short"}) : "-"; }
+function fmtDT(v){
+  if(!v) return "-";
+  const d = new Date(v); if(isNaN(d)) return String(v);
+  return `${fmtD(d)}, ${d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",hour12:true})}`;
+}
 function fmtD(v){
   if(!v) return "-";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
   const d = m ? new Date(+m[1], +m[2]-1, +m[3]) : new Date(v);   // date-only values must not shift with timezone
-  return isNaN(d) ? String(v) : d.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"});
+  return isNaN(d) ? String(v) : `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
 }
 function todayLocal(){
   const d = new Date();
@@ -181,9 +240,17 @@ async function fetchAll(build, {page = 1000, max = 20000} = {}){
 async function getLocations(force = false){
   if(state.locations && !force) return state.locations;
   const r = await state.supabase.from("locations").select("id,location_name,location_code,active").order("location_name");
-  state.locations = r.error ? [] : (r.data || []);
+  state.locations = r.error ? [] : (r.data || []).sort((a,b) => compareLocationNames(a.location_name,b.location_name));
   return state.locations;
 }
+const LOCATION_PRIORITY = ["Bhilarwadi","SSRD","Kharadi","Aundh","Khedshivapur","Shirur","Fatimanagar","Kondhwa","Bhosari","Hadapsar"];
+const LOCATION_RANK = new Map(LOCATION_PRIORITY.map((name,index) => [name.toLowerCase(),index]));
+function compareLocationNames(a,b){
+  const x = String(a || "").trim(), y = String(b || "").trim(), xi = LOCATION_RANK.get(x.toLowerCase()), yi = LOCATION_RANK.get(y.toLowerCase());
+  if(xi !== undefined || yi !== undefined) return (xi ?? Infinity) - (yi ?? Infinity);
+  return x.localeCompare(y);
+}
+const sortLocationNames = names => [...names].sort(compareLocationNames);
 function locName(id){ return state.locations?.find(l => l.id === id)?.location_name || "-"; }
 
 function exportSheet(filename, headers, rows){

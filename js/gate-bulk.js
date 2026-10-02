@@ -18,8 +18,7 @@ function bulkHtml(showDriver = true, gate = ""){ return `<div class="bulk-wrap">
     <div class="gate-field"><label>LOCATION <span>*</span></label>${BULK_LOC(gate)}</div>
     <div class="gate-field"><label>REASON <span>*</span></label><select id="bkReason"><option>NEW VEHICLE</option></select></div>
     <div class="gate-field"><label>RECEIPT DATE <span>*</span></label><input id="bkDate" type="date"></div>
-    ${showDriver ? `<div class="gate-field"><label>DRIVER NAME</label><input id="bkDriver"></div>
-    <div class="gate-field"><label>DRIVER MOBILE</label><input id="bkMobile" inputmode="tel"></div>` : ""}
+    ${showDriver ? `<div class="gate-field"><label>DRIVER NAME</label><input id="bkDriver"></div>` : ""}
     <div class="gate-field gate-remarks-field"><label>REMARKS</label><textarea id="bkRemarks"></textarea></div>
     <div class="gate-field gate-pass-field"><label>GATE PASS (PHOTO) — applies to all selected vehicles</label><input type="file" accept="image/*" id="bkPassFile" class="in-file"><small id="bkPassFile_n" class="in-note"></small></div>
   </div>
@@ -117,6 +116,10 @@ async function saveBulk(){
     }
     const extras = items.map(() => ({}));
     if(BULK.gate === "Bhilarwadi" && type === "IN"){
+      for(const item of items){
+        const missing = missingInPhotos(item.inx || {files:{}});
+        if(missing.length){ toast(`${item.vin}: upload Vehicle IN photos 1–4 before saving.`,"error"); return; }
+      }
       try { for(let i = 0; i < items.length; i++) if(items[i].inx){ btn.textContent = `Uploading ${i+1}/${items.length}…`; extras[i] = await inExtras(items[i].vin, date, items[i].inx); } }
       catch(err){ toast("Photo upload failed: " + err.message, "error"); return; }
     }
@@ -128,7 +131,7 @@ async function saveBulk(){
     const rows = items.map((it,i) => ({vehicle_id:it.vehicle_id || null, vin:it.vin,
       engine_no:nz(it.engine_no), variant:nz(it.variant), color:nz(it.color), finance_bank:nz(it.finance_bank), movement_type:type, location_name:location,
       movement_reason:$("bkReason").value, receipt_dt:date, remarks:nz($("bkRemarks").value), gate_name:BULK.gate,
-      driver_name:BULK.driver ? nz($("bkDriver")?.value) : null, driver_mobile:BULK.driver ? nz($("bkMobile")?.value) : null, ...(passPath ? {gate_pass_file:passPath} : {}), ...extras[i]}));
+      driver_name:BULK.driver ? nz($("bkDriver")?.value) : null, ...(passPath ? {gate_pass_file:passPath} : {}), ...extras[i]}));
     const ins = await state.supabase.from("gate_movements").insert(rows);
     if(ins.error){ toast(ins.error.message + (/gate_pass_file|schema cache/i.test(ins.error.message) ? " — " + GATEPASS_SQL_HINT : ""),"error"); return; }
     await syncVehicleStock(rows);
@@ -147,14 +150,14 @@ async function loadRecentGateMovements(){
 }
 function showGateTable(target, rows, reload){
   const ed = canEditGate(), bh = GATE_GATE === "Bhilarwadi";
-  const cols = [...gateCols(GATE_GATE), ...(bh ? ["IN Details"] : []), "Gate Pass"];
+  const cols = [...gateCols(GATE_GATE,false), ...(bh ? ["IN Details"] : []), "Gate Pass"];
   const bar = ed && rows.length ? `<div class="bulk-bar"><button class="secondary-btn" type="button" data-gt="all">☑ Select all (this page)</button><button class="secondary-btn" type="button" data-gt="edit">✎ Edit selected</button><button class="secondary-btn danger" type="button" data-gt="del">🗑 Delete selected</button></div>` : "";
   target.innerHTML = bar + `<div id="gtBody"></div>`;
   const body = target.querySelector("#gtBody");
   const cells = rows.map((x,i) => {
     const extra = [...(bh ? [x.movement_type === "IN" ? raw(`<button class="table-icon-btn" type="button" title="Photos / tyre serials / EV battery" data-in-view="${i}">📷 ${inCount(x)}/6</button>`) : ""] : []),
       x.gate_pass_file ? raw(`<button class="table-icon-btn" type="button" title="Download gate pass" data-gate-dl="${i}">⬇</button>`) : ""];
-    const r = [...gatePlainRow(x, i, GATE_GATE), ...extra]; if(!ed) return r;
+    const r = [...gatePlainRow(x, i, GATE_GATE,false), ...extra]; if(!ed) return r;
     return [raw(`<input type="checkbox" class="gt-chk" data-i="${i}">`), ...r,
       raw(`<button class="table-icon-btn" type="button" title="Edit" data-gate-edit="${i}">✎</button><button class="table-icon-btn danger" type="button" title="Delete" data-gate-del="${i}">🗑</button>`)];
   });
@@ -180,7 +183,7 @@ function openGateEdit(x, reload = loadRecentGateMovements){
     <div><label>MOVEMENT</label>${gateSel("ge_type","movement_type",["IN","OUT"],x.movement_type)}</div>
     <div><label>REASON</label>${gateSel("ge_reason","movement_reason",[...new Set(["NEW VEHICLE", x.movement_reason].filter(Boolean))],x.movement_reason)}</div>
     ${inp("engine_no","ENGINE NO.",x.engine_no)}${inp("variant","VARIANT",x.variant)}${inp("color","COLOR",x.color)}${inp("finance_bank","FINANCE BANK",x.finance_bank)}
-    ${x.gate_name === "Bhilarwadi" ? "" : inp("driver_name","DRIVER NAME",x.driver_name) + inp("driver_mobile","DRIVER MOBILE",x.driver_mobile)}
+    ${x.gate_name === "Bhilarwadi" ? "" : inp("driver_name","DRIVER NAME",x.driver_name)}
     <div class="full"><label>REMARKS</label><textarea name="remarks">${esc(x.remarks || "")}</textarea></div>
     <div class="full form-actions"><button type="button" class="secondary-btn" id="modalCancel">Cancel</button><button class="primary-btn" type="submit">Save Changes</button></div></form></div></div>`);
   $("modalClose").onclick = closeModal; $("modalCancel").onclick = closeModal;
@@ -188,7 +191,7 @@ function openGateEdit(x, reload = loadRecentGateMovements){
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target).entries());
     const upd = {location_name:nz(f.location_name), receipt_dt:f.receipt_dt || null, movement_type:f.movement_type, movement_reason:f.movement_reason,
       engine_no:nz(f.engine_no), variant:nz(f.variant), color:nz(f.color), finance_bank:nz(f.finance_bank), remarks:nz(f.remarks)};
-    if(x.gate_name !== "Bhilarwadi"){ upd.driver_name = nz(f.driver_name); upd.driver_mobile = nz(f.driver_mobile); }
+    if(x.gate_name !== "Bhilarwadi") upd.driver_name = nz(f.driver_name);
     const r = await state.supabase.from("gate_movements").update(upd).eq("id", x.id).select("id");
     if(r.error) return toast(r.error.message,"error");
     if(!r.data?.length) return toast("Not updated — permission नाही (GATE_BULK_EDIT_DELETE.sql run करा).","error");
@@ -203,7 +206,7 @@ function openGateBulkEdit(list, reload){
     <div><label>REASON</label>${gateSel("gb_reason","movement_reason",["NEW VEHICLE"],"",true)}</div>
     <div><label>LOCATION</label>${locSelect("gb_loc","location_name","","— no change —")}</div>
     <div><label>RECEIPT DATE</label><input name="receipt_dt" type="date"></div>
-    ${GATE_GATE === "Bhilarwadi" ? "" : `<div><label>DRIVER NAME</label><input name="driver_name"></div><div><label>DRIVER MOBILE</label><input name="driver_mobile"></div>`}
+    ${GATE_GATE === "Bhilarwadi" ? "" : `<div><label>DRIVER NAME</label><input name="driver_name"></div>`}
     <div class="full"><label>REMARKS</label><textarea name="remarks"></textarea></div>
     <div class="full form-actions"><button type="button" class="secondary-btn" id="modalCancel">Cancel</button><button class="primary-btn" type="submit">Update ${list.length} rows</button></div></form></div></div>`);
   $("modalClose").onclick = closeModal; $("modalCancel").onclick = closeModal;

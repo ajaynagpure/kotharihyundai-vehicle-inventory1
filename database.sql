@@ -328,9 +328,8 @@ BEGIN
   END IF;
 END $$;
 
-
 -- ============================================================
--- SOURCE: NEW_FEATURES.sql
+-- SOURCE: NEW_FEATURES.sql + UPDATE_TALLY_FREE_LOCATION.sql
 -- ============================================================
 -- Kothari Hyundai v3: run ONCE in Supabase > SQL Editor. Safe to re-run.
 
@@ -350,9 +349,12 @@ EXCEPTION WHEN others THEN
   RAISE NOTICE 'Bhilarwadi location not created automatically (%). Add it in Settings > Locations.', SQLERRM;
 END $$;
 
--- 4. Vehicle IN (Bhilarwadi or Branch) => Available Stock ("In Stock") at that location.
---    Runs inside the database so it works for every role (gate operators cannot edit vehicles directly).
---    Sales / Not Delivered and Delivered vehicles are never moved back.
+-- 4. Normalize earlier Tally Done statuses.
+UPDATE public.vehicles SET status = 'Tally Done'
+ WHERE status ILIKE '%not%deliver%' OR status ILIKE 'bill%' OR status ILIKE 'sales%';
+
+-- 5. Vehicle IN records the location; Tally Done keeps its status until Delivery Entry is saved.
+--    Delivered vehicles are never moved back.
 CREATE OR REPLACE FUNCTION public.gate_in_makes_stock() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE loc uuid;
@@ -360,16 +362,29 @@ BEGIN
   IF NEW.vehicle_id IS NULL OR upper(coalesce(NEW.movement_type, '')) <> 'IN' THEN RETURN NEW; END IF;
   SELECT id INTO loc FROM public.locations WHERE lower(location_name) = lower(coalesce(NEW.location_name, '')) LIMIT 1;
   UPDATE public.vehicles v
-     SET status = 'In Stock', location_id = COALESCE(loc, v.location_id)
+     SET status = CASE WHEN lower(coalesce(v.status, '')) LIKE '%tally%'
+                         OR lower(coalesce(v.status, '')) LIKE '%not%deliver%'
+                         OR lower(coalesce(v.status, '')) LIKE '%bill%'
+                       THEN v.status ELSE 'In Stock' END,
+         location_id = COALESCE(loc, v.location_id)
    WHERE v.id = NEW.vehicle_id
-     AND lower(coalesce(v.status, '')) NOT LIKE '%deliver%'
-     AND lower(coalesce(v.status, '')) NOT LIKE '%bill%';
+     AND (lower(coalesce(v.status, '')) NOT LIKE '%deliver%'
+          OR lower(coalesce(v.status, '')) LIKE '%not%deliver%');
   RETURN NEW;
 END $$;
 
 DROP TRIGGER IF EXISTS trg_gate_in_makes_stock ON public.gate_movements;
 CREATE TRIGGER trg_gate_in_makes_stock AFTER INSERT ON public.gate_movements
   FOR EACH ROW EXECUTE FUNCTION public.gate_in_makes_stock();
+
+-- 6. Existing Tally Done vehicles without a location use their latest gate IN location.
+UPDATE public.vehicles v SET location_id = x.loc_id
+  FROM (SELECT DISTINCT ON (gm.vehicle_id) gm.vehicle_id, l.id AS loc_id
+          FROM public.gate_movements gm
+          JOIN public.locations l ON lower(l.location_name) = lower(coalesce(gm.location_name, ''))
+         WHERE upper(coalesce(gm.movement_type, '')) = 'IN' AND gm.vehicle_id IS NOT NULL
+         ORDER BY gm.vehicle_id, gm.created_at DESC) x
+ WHERE v.id = x.vehicle_id AND v.location_id IS NULL AND v.status ILIKE '%tally%';
 
 NOTIFY pgrst, 'reload schema';
 
@@ -1085,5 +1100,165 @@ $$;
 
 REVOKE ALL ON FUNCTION public.delete_user_account(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delete_user_account(uuid) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
+
+-- ============================================================
+-- SOURCE: LOCATION_ACCESS_SECURITY.sql
+-- ============================================================
+-- Assigned-location users see only their location; Admin and unassigned users retain all-location access.
+CREATE OR REPLACE FUNCTION public.current_user_location_id()
+RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT location_id FROM public.user_profiles
+   WHERE id = auth.uid() AND active IS NOT FALSE LIMIT 1;
+$$;
+REVOKE ALL ON FUNCTION public.current_user_location_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.current_user_location_id() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.location_row_allowed(p_location_id uuid, p_location_name text DEFAULT NULL)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_location_id uuid;
+  v_location_name text;
+  v_active boolean;
+BEGIN
+  SELECT location_id, active INTO v_location_id, v_active
+    FROM public.user_profiles WHERE id = auth.uid();
+  IF NOT FOUND OR v_active IS FALSE THEN RETURN false; END IF;
+  IF public.is_admin() OR v_location_id IS NULL THEN RETURN true; END IF;
+  IF p_location_id = v_location_id THEN RETURN true; END IF;
+  IF p_location_id IS NOT NULL OR p_location_name IS NULL THEN RETURN false; END IF;
+  SELECT location_name INTO v_location_name FROM public.locations WHERE id = v_location_id;
+  RETURN lower(trim(coalesce(p_location_name, ''))) = lower(trim(coalesce(v_location_name, '')));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.location_row_allowed(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.location_row_allowed(uuid, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.can_access_gate_photo(p_name text)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_vin text;
+BEGIN
+  v_vin := CASE WHEN split_part(coalesce(p_name, ''), '/', 1) = 'gatepass'
+    THEN split_part(p_name, '/', 2) ELSE split_part(coalesce(p_name, ''), '/', 1) END;
+  IF v_vin = '' THEN RETURN false; END IF;
+  RETURN EXISTS (
+    SELECT 1 FROM public.vehicles v WHERE upper(coalesce(v.vin, '')) = upper(v_vin)
+      AND (public.location_row_allowed(v.location_id, v.delivery_location)
+        OR public.location_row_allowed(v.location_id, v.sales_location))
+  ) OR EXISTS (
+    SELECT 1 FROM public.gate_movements gm WHERE upper(coalesce(gm.vin, '')) = upper(v_vin)
+      AND public.location_row_allowed(NULL, gm.location_name)
+  );
+END;
+$$;
+REVOKE ALL ON FUNCTION public.can_access_gate_photo(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.can_access_gate_photo(text) TO authenticated;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['vehicles','locations','gate_movements','deliveries','vehicle_timeline','import_batches'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'authenticated_read_' || t, t);
+    END IF;
+  END LOOP;
+  IF to_regclass('public.vehicles') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS import_read_vehicles ON public.vehicles';
+    EXECUTE 'DROP POLICY IF EXISTS import_write_vehicles ON public.vehicles';
+  END IF;
+  IF to_regclass('public.import_batches') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS import_read_import_batches ON public.import_batches';
+    EXECUTE 'DROP POLICY IF EXISTS import_write_import_batches ON public.import_batches';
+  END IF;
+END $$;
+
+DROP POLICY IF EXISTS locations_location_scope ON public.locations;
+CREATE POLICY locations_location_scope ON public.locations FOR SELECT TO authenticated
+USING (public.location_row_allowed(id, location_name));
+
+DROP POLICY IF EXISTS vehicles_location_scope ON public.vehicles;
+CREATE POLICY vehicles_location_scope ON public.vehicles FOR SELECT TO authenticated
+USING (public.location_row_allowed(location_id, delivery_location)
+    OR public.location_row_allowed(location_id, sales_location));
+
+-- Accounts may import and update only vehicles in their assigned location.
+DROP POLICY IF EXISTS import_write_vehicles ON public.vehicles;
+CREATE POLICY import_write_vehicles ON public.vehicles FOR ALL TO authenticated
+USING (
+  EXISTS (SELECT 1 FROM public.user_profiles up JOIN public.roles r ON r.id=up.role_id
+    WHERE up.id=auth.uid() AND up.active IS NOT FALSE AND lower(trim(r.name)) IN ('admin','accounts'))
+  AND (public.location_row_allowed(location_id, delivery_location)
+    OR public.location_row_allowed(location_id, sales_location))
+)
+WITH CHECK (
+  EXISTS (SELECT 1 FROM public.user_profiles up JOIN public.roles r ON r.id=up.role_id
+    WHERE up.id=auth.uid() AND up.active IS NOT FALSE AND lower(trim(r.name)) IN ('admin','accounts'))
+  AND (public.location_row_allowed(location_id, delivery_location)
+    OR public.location_row_allowed(location_id, sales_location))
+);
+
+DROP POLICY IF EXISTS gate_movements_location_scope ON public.gate_movements;
+CREATE POLICY gate_movements_location_scope ON public.gate_movements FOR SELECT TO authenticated
+USING (public.location_row_allowed(NULL, location_name)
+  OR (location_name IS NULL AND EXISTS (
+    SELECT 1 FROM public.vehicles v WHERE v.id=gate_movements.vehicle_id
+      AND (public.location_row_allowed(v.location_id, v.delivery_location)
+        OR public.location_row_allowed(v.location_id, v.sales_location))
+  )));
+
+DO $$
+BEGIN
+  IF to_regclass('public.deliveries') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS deliveries_location_scope ON public.deliveries';
+    EXECUTE $p$CREATE POLICY deliveries_location_scope ON public.deliveries FOR SELECT TO authenticated
+      USING (public.location_row_allowed(NULL, delivery_location)
+        OR (delivery_location IS NULL AND EXISTS (
+          SELECT 1 FROM public.vehicles v WHERE v.id=deliveries.vehicle_id
+            AND (public.location_row_allowed(v.location_id, v.delivery_location)
+              OR public.location_row_allowed(v.location_id, v.sales_location))
+        )))$p$;
+  END IF;
+  IF to_regclass('public.vehicle_timeline') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS vehicle_timeline_location_scope ON public.vehicle_timeline';
+    EXECUTE $p$CREATE POLICY vehicle_timeline_location_scope ON public.vehicle_timeline FOR SELECT TO authenticated
+      USING (EXISTS (SELECT 1 FROM public.vehicles v WHERE v.id=vehicle_timeline.vehicle_id
+        AND (public.location_row_allowed(v.location_id, v.delivery_location)
+          OR public.location_row_allowed(v.location_id, v.sales_location))))$p$;
+  END IF;
+  IF to_regclass('public.import_batches') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS import_batches_location_scope ON public.import_batches';
+    EXECUTE $p$CREATE POLICY import_batches_location_scope ON public.import_batches FOR SELECT TO authenticated
+      USING (public.location_row_allowed(NULL, NULL))$p$;
+    EXECUTE 'DROP POLICY IF EXISTS import_write_import_batches ON public.import_batches';
+    EXECUTE $p$CREATE POLICY import_write_import_batches ON public.import_batches FOR INSERT TO authenticated
+      WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles up JOIN public.roles r ON r.id=up.role_id
+        WHERE up.id=auth.uid() AND up.active IS NOT FALSE AND lower(trim(r.name)) IN ('admin','accounts')))$p$;
+  END IF;
+END $$;
+
+DROP POLICY IF EXISTS gate_photos_select ON storage.objects;
+CREATE POLICY gate_photos_select ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id='gate-photos' AND public.can_access_gate_photo(name));
+
+DROP POLICY IF EXISTS gate_photos_update ON storage.objects;
+CREATE POLICY gate_photos_update ON storage.objects FOR UPDATE TO authenticated
+USING (bucket_id='gate-photos' AND public.can_access_gate_photo(name))
+WITH CHECK (bucket_id='gate-photos' AND public.can_access_gate_photo(name));
+
+DO $$
+DECLARE v text;
+BEGIN
+  FOREACH v IN ARRAY ARRAY['gate_movement_report','location_stock_report','model_stock_report',
+    'finance_stock_report','dealer_code_stock_report','aging_report','in_transit_report',
+    'pending_order_report','delivery_report','dashboard_stock_summary'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relname=v AND c.relkind='v') THEN
+      EXECUTE format('ALTER VIEW public.%I SET (security_invoker = true)', v);
+    END IF;
+  END LOOP;
+END $$;
 
 NOTIFY pgrst, 'reload schema';

@@ -13,6 +13,7 @@ async function allVehicles(force = false){
 }
 function vStage(v){
   const s = String(v.status || "").toLowerCase();
+  if(s.includes("cancel")) return "cancelled";
   if(s.includes("tally")) return "bill";                                  // "Tally Done" = billed, not yet delivered
   if(/not[\s\-_\/]*deliver|undeliver/.test(s)) return "bill";          // "Tally Done" must not count as Delivered
   if(s.includes("deliver")) return "delivered";
@@ -25,6 +26,7 @@ const vValue = v => Number(v.stock_value || 0);
 // Location of a vehicle. Tally Done vehicles stay in their location until the Delivery Entry is saved;
 // if no location was recorded yet, the Tally Location from the Sales report is used when it matches a known location.
 function vLocName(v){
+  if(vStage(v) === "delivered" && v.delivery_location) return v.delivery_location;
   if(v.location_id) return locName(v.location_id);
   if(vStage(v) === "bill" && v.sales_location){
     const k = String(v.sales_location).trim().toLowerCase(), l = (state.locations || []).find(x => String(x.location_name).trim().toLowerCase() === k);
@@ -36,17 +38,18 @@ function vLocName(v){
 function locationRows(all){
   const m = new Map();
   all.forEach(v => { const k = vLocName(v), st = vStage(v);
+    if(st === "cancelled") return;
     const x = m.get(k) || {key:k, location_name:k, stock_count:0, bill_count:0, total_value:0, delivered_count:0, delivered_value:0};
     if(st === "stock"){ x.stock_count++; x.total_value += vValue(v); }
     else if(st === "bill"){ x.bill_count++; x.total_value += vValue(v); }
     else if(st === "delivered"){ x.delivered_count++; x.delivered_value += vValue(v); }
     m.set(k, x); });
-  return [...m.values()].filter(x => x.stock_count + x.bill_count + x.delivered_count);
+  return [...m.values()].filter(x => x.stock_count + x.bill_count + x.delivered_count).sort((a,b) => compareLocationNames(a.location_name,b.location_name));
 }
 function groupStock(vehicles, keyOf){
   // Free Stock = stage "stock" only. In Transit, Pending Order and Tally Done are counted separately; Delivered is left out.
   const g = new Map();
-  vehicles.filter(v => vStage(v) !== "delivered").forEach(v => {
+  vehicles.filter(v => !["delivered","cancelled"].includes(vStage(v))).forEach(v => {
     const k = keyOf(v) || "Not Available";
     const x = g.get(k) || {key:k, stock_count:0, in_transit_count:0, pending_count:0, bill_count:0, stock_value:0, in_transit_value:0};
     const st = vStage(v);
@@ -69,13 +72,13 @@ function daysSince(iso){
 }
 async function gateRowsFallback(){
   const sb = state.supabase;
-  let r = await sb.from("gate_movement_report").select("*").order("movement_time",{ascending:false}).limit(1000);
-  if(!r.error) return r.data || [];
-  r = await sb.from("gate_movements").select("*").order("created_at",{ascending:false}).limit(1000);
-  if(r.error) r = await sb.from("gate_movements").select("*").limit(1000);
+  const r = await sb.from("gate_movements").select("*").order("created_at",{ascending:false}).limit(1000);
   if(r.error) return [];
-  return (r.data || []).map(x => ({movement_time:x.movement_time || x.created_at || x.receipt_dt, movement_type:x.movement_type, vin:x.vin,
-    from_location:x.from_location || "", to_location:x.to_location || "", gate_name:x.gate_name}));
+  return (r.data || []).map(x => {
+    const inbound = String(x.movement_type || "").toUpperCase() === "IN", loc = x.location_name || "";
+    return {...x, movement_time:x.movement_time || x.created_at || x.receipt_dt,
+      from_location:x.from_location || (inbound ? "" : loc), to_location:x.to_location || (inbound ? loc : "")};
+  });
 }
 async function computedRows(source){
   if(source === "gate_movement_report") return gateRowsFallback();
@@ -83,7 +86,7 @@ async function computedRows(source){
   await getLocations();
   switch(source){
     case "dashboard_stock_summary": {
-      const c = {stock:0, pending:0, transit:0, bill:0, delivered:0}; all.forEach(v => c[vStage(v)]++);
+      const c = {stock:0, pending:0, transit:0, bill:0, delivered:0, cancelled:0}; all.forEach(v => c[vStage(v)]++);
       return [{total_stock:c.stock + c.transit + c.pending + c.bill, available_stock:c.stock, in_transit:c.transit, pending_order:c.pending, bill_not_delivered:c.bill, delivered:c.delivered}];
     }
     case "location_stock_report":    return locationRows(all);
