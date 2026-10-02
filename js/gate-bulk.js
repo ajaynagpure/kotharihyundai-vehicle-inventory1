@@ -7,7 +7,7 @@ const canEditGate = () => state.isAdmin;   // DB: UPDATE/DELETE = Admin only (GA
 const BULK = {gate:"", items:[], pick:[], driver:true};
 const gateOfPage = () => state.page === "bhilarwadi" ? "Bhilarwadi" : state.page === "gate" ? "Branch" : "";
 const nz = v => { const t = String(v ?? "").trim(); return t === "" ? null : t; };
-const toItem = (v, fromMove) => ({vehicle_id: fromMove ? (v.vehicle_id || null) : v.id, vin:v.vin, engine_no:v.engine_no || "",
+const toItem = (v, fromMove) => ({vehicle_id: fromMove ? (v.vehicle_id || null) : v.id, vin:v.vin, chassis_no:v.chassis_no || "", engine_no:v.engine_no || "",
   variant:v.variant || "", color:v.color || "", finance_bank:v.finance_bank || v.finance_company || "", model:v.model || ""});
 
 /* ---------------- Bulk In / Out ---------------- */
@@ -20,7 +20,6 @@ function bulkHtml(showDriver = true, gate = ""){ const bhilarwadi = gate === "Bh
     <div class="gate-field"><label>RECEIPT DATE <span>*</span></label><input id="bkDate" type="date"></div>
     ${showDriver ? `<div class="gate-field"><label>DRIVER NAME</label><input id="bkDriver"></div>` : ""}
     <div class="gate-field gate-remarks-field"><label>REMARKS</label><textarea id="bkRemarks"></textarea></div>
-    <div class="gate-field gate-pass-field"><label>GATE PASS (PHOTO) <span>*</span> — applies to all selected vehicles</label><input type="file" accept="image/*" id="bkPassFile" class="in-file" required><small id="bkPassFile_n" class="in-note"></small></div>
   </div>
   <div class="bulk-block"><b>1. Chassis निवडा</b>
     <div class="gate-filters"><input id="bkSearch" type="search" placeholder="VIN / last 6 digits" style="width:180px"><button class="primary-btn" type="button" id="bkFind">⌕ Search</button><button class="secondary-btn" type="button" id="bkScan">📷 Scan</button><button class="secondary-btn" type="button" id="bkInside">Currently IN (this gate)</button></div>
@@ -93,7 +92,7 @@ function drawBulkList(){
   const box = $("bkList"), inMode = BULK.gate === "Bhilarwadi" && $("bkType").value === "IN";
   if(!BULK.items.length){ box.innerHTML = emptyState("अजून कोणतीही chassis निवडलेली नाही."); return; }
   const inCell = (it,i) => { const d = it.inx, ph = d ? Object.keys(d.files).length : 0, tx = d ? d.tyres.filter(Boolean).length + (d.ev ? 1 : 0) : 0;
-    return raw(`<button class="table-icon-btn" type="button" data-bin="${i}" title="Photos / tyre serials / EV battery">📷 ${ph}/6 · ${tx} no.</button>`); };
+    return raw(`<button class="table-icon-btn" type="button" data-bin="${i}" title="Photos / tyre serials / EV battery">📷 ${ph}/7 · ${tx} no.</button>`); };
   box.innerHTML = table(["#","VIN","Model","Variant","Color","Finance",...(inMode ? ["IN Details"] : []),""], BULK.items.map((it,i) => [i+1, it.vin, it.model, it.variant, it.color, it.finance_bank,
     ...(inMode ? [inCell(it,i)] : []),
     raw(`<button class="table-icon-btn danger" type="button" data-rm="${i}" title="Remove">✕</button>`)]));
@@ -108,7 +107,6 @@ async function saveBulk(){
   if(!date){ toast("Receipt date टाका.","error"); return; }
   const location = nz($("bkLocation")?.value);
   if(!location){ toast("Location निवडा.","error"); return; }
-  if(!$("bkPassFile")?.files?.[0]){ toast("Upload the gate pass photo before saving bulk movements.","error"); return; }
   const btn = $("bkSave"); btn.disabled = true;
   try {
     const vins = items.map(i => i.vin);
@@ -136,24 +134,25 @@ async function saveBulk(){
         const missing = missingInPhotos(item.inx || {files:{}});
         if(missing.length){ toast(`${item.vin}: upload Vehicle IN photos 1–4 before saving.`,"error"); return; }
       }
-      try { for(let i = 0; i < items.length; i++) if(items[i].inx){ btn.textContent = `Uploading ${i+1}/${items.length}…`; extras[i] = await inExtras(items[i].vin, date, items[i].inx); } }
+      try {
+        for(let i = 0; i < items.length; i++) if(items[i].inx){
+          btn.textContent = `Uploading ${i+1}/${items.length}…`;
+          const chassisNo = await inChassisFolder(items[i]);
+          extras[i] = await inExtras(chassisNo, items[i].inx);
+        }
+      }
       catch(err){ toast("Photo upload failed: " + err.message, "error"); return; }
-    }
-    let passPath = null; const passFile = $("bkPassFile")?.files?.[0];
-    if(passFile){
-      btn.textContent = "Uploading gate pass…";
-      try { passPath = await uploadGatePass(passFile, "BULK", date, type); } catch(err){ toast("Gate pass upload failed: " + err.message, "error"); return; }
     }
     const rows = items.map((it,i) => ({vehicle_id:it.vehicle_id || null, vin:it.vin,
       engine_no:nz(it.engine_no), variant:nz(it.variant), color:nz(it.color), finance_bank:nz(it.finance_bank), movement_type:type, location_name:location,
       movement_reason:$("bkReason").value, receipt_dt:date, remarks:nz($("bkRemarks").value), gate_name:BULK.gate,
-      driver_name:BULK.driver ? nz($("bkDriver")?.value) : null, ...(passPath ? {gate_pass_file:passPath} : {}), ...extras[i]}));
+      driver_name:BULK.driver ? nz($("bkDriver")?.value) : null, ...extras[i]}));
     const ins = await state.supabase.from("gate_movements").insert(rows);
-    if(ins.error){ toast(ins.error.message + (/gate_pass_file|schema cache/i.test(ins.error.message) ? " — " + GATEPASS_SQL_HINT : ""),"error"); return; }
+    if(ins.error){ toast(ins.error.message,"error"); return; }
     await syncVehicleStock(rows);
     logAudit("BULK_GATE_MOVEMENT","gate","gate_movements",null,{gate:BULK.gate,movement:type,count:rows.length,vins});
     toast(`${rows.length} vehicles ${type} saved.`,"success");
-    BULK.items = []; $("bkResults").innerHTML = ""; $("bkPassFile").value = ""; $("bkPassFile_n").textContent = ""; drawBulkList(); loadRecentGateMovements();
+    BULK.items = []; $("bkResults").innerHTML = ""; drawBulkList(); loadRecentGateMovements();
   } finally { btn.disabled = false; btn.textContent = "▣ Save Bulk Movement"; }
 }
 
@@ -171,7 +170,7 @@ function showGateTable(target, rows, reload){
   target.innerHTML = bar + `<div id="gtBody"></div>`;
   const body = target.querySelector("#gtBody");
   const cells = rows.map((x,i) => {
-    const extra = [...(bh ? [x.movement_type === "IN" ? raw(`<button class="table-icon-btn" type="button" title="Photos / tyre serials / EV battery" data-in-view="${i}">📷 ${inCount(x)}/6</button>`) : ""] : []),
+    const extra = [...(bh ? [x.movement_type === "IN" ? raw(`<button class="table-icon-btn" type="button" title="Photos / tyre serials / EV battery" data-in-view="${i}">📷 ${inCount(x)}/7</button>`) : ""] : []),
       x.gate_pass_file ? raw(`<button class="table-icon-btn" type="button" title="Download gate pass" data-gate-dl="${i}">⬇</button>`) : ""];
     const r = [...gatePlainRow(x, i, GATE_GATE,false), ...extra]; if(!ed) return r;
     return [raw(`<input type="checkbox" class="gt-chk" data-i="${i}">`), ...r,

@@ -250,7 +250,7 @@ async function importRun(page){
       successful_rows:res.added + res.updated, failed_rows:res.failed, status:res.failed ? "Partial" : "Completed"});
   } catch { /* history is best effort */ }
   logAudit("IMPORT", "import", t.key, null, res);
-  toast(`${t.title}: ${res.added + res.updated} ok, ${res.failed} failed`, res.failed ? "error" : "success");
+  toast(`${t.title} import completed: ${res.added + res.updated} ok, ${res.failed} failed`, res.failed ? "error" : "success");
 }
 async function renderImportHistory(){
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Import History</h3>${state.isAdmin ? `<button class="secondary-btn danger" type="button" id="clearImportHistory">Clear History</button>` : ""}</div><div id="importHistory" class="table-wrap"></div></div>`;

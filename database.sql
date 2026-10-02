@@ -19,7 +19,7 @@ NOTIFY pgrst, 'reload schema';
 -- ============================================================
 -- SOURCE: GATE_IN_DETAILS.sql
 -- ============================================================
--- Bhilarwadi Vehicle IN details: 6 photos (private storage bucket) + 4 tyre serials + EV battery. Safe to re-run.
+-- Bhilarwadi Vehicle IN details: 7 compressed photos and individual PDFs (private bucket) + 4 tyre serials + EV battery. Safe to re-run.
 ALTER TABLE public.gate_movements
   ADD COLUMN IF NOT EXISTS photo_front text,
   ADD COLUMN IF NOT EXISTS photo_chassis_no text,
@@ -27,16 +27,17 @@ ALTER TABLE public.gate_movements
   ADD COLUMN IF NOT EXISTS photo_form22 text,
   ADD COLUMN IF NOT EXISTS photo_cng_cert text,
   ADD COLUMN IF NOT EXISTS photo_cng_kit text,
+  ADD COLUMN IF NOT EXISTS photo_ecu text,
   ADD COLUMN IF NOT EXISTS tyre_serial_1 text,
   ADD COLUMN IF NOT EXISTS tyre_serial_2 text,
   ADD COLUMN IF NOT EXISTS tyre_serial_3 text,
   ADD COLUMN IF NOT EXISTS tyre_serial_4 text,
   ADD COLUMN IF NOT EXISTS ev_battery_no text;
 
--- Private bucket, images only, 5 MB each
+-- Private bucket, compressed photos and their PDFs, 5 MB each
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES ('gate-photos', 'gate-photos', false, 5242880, ARRAY['image/jpeg','image/png','image/webp'])
-ON CONFLICT (id) DO UPDATE SET public = false, file_size_limit = 5242880, allowed_mime_types = ARRAY['image/jpeg','image/png','image/webp'];
+VALUES ('gate-photos', 'gate-photos', false, 5242880, ARRAY['image/jpeg','image/png','image/webp','application/pdf'])
+ON CONFLICT (id) DO UPDATE SET public = false, file_size_limit = 5242880, allowed_mime_types = ARRAY['image/jpeg','image/png','image/webp','application/pdf'];
 
 DROP POLICY IF EXISTS gate_photos_select ON storage.objects;
 CREATE POLICY gate_photos_select ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'gate-photos');

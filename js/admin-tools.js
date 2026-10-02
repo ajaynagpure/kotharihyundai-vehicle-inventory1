@@ -159,7 +159,7 @@ async function renderRolesPanel(){
     const name = (prompt("New role name") || "").trim(); if(!name) return;
     const x = await state.supabase.from("roles").insert({name}).select("id");
     if(x.error) return toast(x.error.message + dbHint(x.error), "error");
-    logAudit("CREATE_ROLE","users","roles",x.data?.[0]?.id,{name}); toast("Role added. Set its permissions on the Permissions page.","success"); renderRolesPanel();
+    logAudit("CREATE_ROLE","users","roles",x.data?.[0]?.id,{name}); toast("Role created. Set its permissions on the Permissions page.","success"); renderRolesPanel();
   };
   box.querySelectorAll("[data-role-edit]").forEach(b => b.addEventListener("click", async () => {
     const x = roles[+b.dataset.roleEdit], name = (prompt("Role name", x.name) || "").trim(); if(!name || name === x.name) return;

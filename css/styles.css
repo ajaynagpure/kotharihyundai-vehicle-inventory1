@@ -170,7 +170,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .gate-in-block{border:1px dashed #b2c4de;border-radius:8px;padding:10px 12px;margin:6px 0;background:#f8fbff}
 .gate-in-title{font-size:13px;font-weight:700;color:#002c5f;margin-bottom:4px}
 .gate-in-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 12px}
-.gate-in-block input[type=file]{font-size:12px;padding:4px}
+.gate-in-capture{display:block;width:100%;min-height:38px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#12345a;text-align:left;font-size:13px;cursor:pointer}
+.gate-in-capture:hover{border-color:#0b63ce;background:#f3f8ff}
 .in-note{display:block;font-size:12px;color:#067647;min-height:11px;word-break:break-all}
 .in-thumb{height:64px;border-radius:5px;border:1px solid #d7dce5;margin-top:3px}
 @media(max-width:760px){.gate-in-grid{grid-template-columns:1fr}}
@@ -390,6 +391,7 @@ th[data-sort-direction="desc"]::after{content:" \25BC";font-size:9px;color:#0b63
 @media(max-width:760px){.company-settings-grid{grid-template-columns:1fr}.company-settings-full{grid-column:auto}.company-settings-header,.company-settings-body{padding:16px}.company-settings-actions{justify-content:stretch}.company-settings-actions .primary-btn{width:100%}}
 
 .is-saved{background:#12805c!important;border-color:#12805c!important;color:#fff!important}
+.backup-panel{max-width:1000px}.backup-panel>.backup-label,.backup-restore-section>.backup-label{display:block;margin:14px 0 6px;font-size:13px;font-weight:700}.backup-panel>input[type=password],.backup-restore-section>input[type=password]{width:min(100%,420px);padding:9px 10px;border:1px solid #cbd5e1;border-radius:6px}.backup-restore-section{margin-top:22px;padding-top:18px;border-top:1px solid #e5e7eb}.backup-restore-section h4{margin:0 0 8px;color:#172033}.backup-restore-section>label:not(.backup-label){display:block;margin:14px 0 6px;font-size:13px;font-weight:700}.backup-restore-section>input[type=file]{max-width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff}.backup-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.backup-restore-section #backupPreview{margin-top:14px}
 
 /* Responsive app watermark and photo previews */
 .app{isolation:isolate}

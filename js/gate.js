@@ -114,7 +114,6 @@ async function renderGate(page){
         <div class="gate-field"><label for="gateReceiptDate">RECEIPT DATE <span>*</span></label><input name="receipt_dt" id="gateReceiptDate" type="date" required></div>
         ${showDriver ? `<div class="gate-field"><label for="gateDriver">DRIVER NAME</label><input name="driver_name" id="gateDriver" autocomplete="off"></div>` : ""}
         <div class="gate-field gate-remarks-field"><label for="gateRemarks">REMARKS</label><textarea name="remarks" id="gateRemarks" placeholder="Enter remarks"></textarea></div>
-        <div class="gate-field gate-pass-field"><label for="gatePassFile">GATE PASS (PHOTO) <span>*</span></label><input type="file" accept="image/*" id="gatePassFile" class="in-file" required><small id="gatePassFile_n" class="in-note"></small></div>
         ${gateName === "Bhilarwadi" ? `<div class="gate-in-wrap">${inBlockHtml("gi")}</div>` : ""}
         <div class="gate-form-actions"><span id="purchaseLookupMsg" class="form-help">${GATE_HELP}</span><div class="gate-action-buttons"><button class="secondary-btn" type="button" id="gateClear">↻ Clear</button><button class="primary-btn" type="submit" id="gateSave">▣ Save Gate Movement</button></div></div>
       </form></div>
@@ -218,17 +217,19 @@ async function saveGate(e){
     if(!vin){ toast("Enter VIN number or last 6 digits.","error"); return; }
     if(!(f.location_name || "").trim()){ toast("Select Location.","error"); return; }
     if(!gateMovementLocationAllowed(f.gate_name,f.movement_type,f.location_name)){ toast("Selected location is not allowed for this movement.","error"); return; }
-    if(!$("gatePassFile")?.files?.[0]){ toast("Upload the gate pass photo before saving.","error"); return; }
-
     let vehicleId = state.gateSelectedVehicleId || null, vehicle = null;
-    const exact = await state.supabase.from("vehicles").select("id,vin").eq("vin", vin).maybeSingle();
+    const exact = await state.supabase.from("vehicles").select("id,vin,chassis_no").eq("vin", vin).maybeSingle();
     if(!exact.error && exact.data){ vehicleId = exact.data.id; vehicle = exact.data; }
     else if(!vehicleId && vin.length >= 6){
-      const find = await state.supabase.from("vehicles").select("id,vin").ilike("vin", `%${vin.slice(-6)}%`).limit(2);
+      const find = await state.supabase.from("vehicles").select("id,vin,chassis_no").ilike("vin", `%${vin.slice(-6)}%`).limit(2);
       if(!find.error && find.data?.length === 1){ vehicleId = find.data[0].id; vehicle = find.data[0]; }
     }
     const finalVin = vehicle?.vin || vin;
     if(!state.isAdmin && f.movement_type === "OUT" && !vehicleId){ toast("OUT movement requires a vehicle assigned to your location.","error"); return; }
+    if(f.gate_name === "Bhilarwadi" && f.movement_type === "IN"){
+      const missing = missingInPhotos(readIn("gi"));
+      if(missing.length){ toast("Upload required Vehicle IN photos before saving: " + missing.join(", "), "error"); return; }
+    }
 
     let last;
     try { last = await latestGateMovement(finalVin); }
@@ -246,17 +247,14 @@ async function saveGate(e){
       remarks:nn(f.remarks), gate_name:nn(f.gate_name), driver_name:nn(f.driver_name)};
     if(f.gate_name === "Bhilarwadi" && f.movement_type === "IN"){
       btn.textContent = "Uploading photos…";
-      try { Object.assign(payload, await inExtras(finalVin, payload.receipt_dt, readIn("gi"))); }
+      try {
+        const chassisNo = await inChassisFolder({vehicle_id:vehicleId, vin:finalVin, chassis_no:vehicle?.chassis_no});
+        Object.assign(payload, await inExtras(chassisNo, readIn("gi")));
+      }
       catch(err){ toast("Photo upload failed: " + err.message, "error"); return; }
     }
-    const passFile = $("gatePassFile")?.files?.[0];
-    if(passFile){
-      btn.textContent = "Uploading gate pass…";
-      try { payload.gate_pass_file = await uploadGatePass(passFile, finalVin, payload.receipt_dt, payload.movement_type); }
-      catch(err){ toast("Gate pass upload failed: " + err.message, "error"); return; }
-    }
     const ins = await state.supabase.from("gate_movements").insert(payload);
-    if(ins.error){ toast(ins.error.message + (/gate_pass_file|schema cache/i.test(ins.error.message) ? " — " + GATEPASS_SQL_HINT : ""),"error"); return; }
+    if(ins.error){ toast(ins.error.message,"error"); return; }
     await syncVehicleStock([payload]);
     toast(vehicleId ? "Gate movement saved." : "Gate movement saved with manual vehicle details.","success");
     clearGateForm();

@@ -11,7 +11,7 @@ const GATEPASS_SQL_HINT = "Run NEW_FEATURES.sql once in Supabase SQL Editor (add
 async function renderDocuments(){
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Bhilarwadi Documents</h3></div>
     <form id="docForm" class="toolbar"><div class="searchbox"><input id="docVin" placeholder="Search VIN / last 6 digits" autocomplete="off" aria-label="Search VIN"><button type="submit">Search</button></div></form>
-    <p class="form-help">Shows the details saved when the vehicle came IN at Bhilarwadi: photos, tyre serial numbers and EV battery number.</p>
+    <p class="form-help">Shows Bhilarwadi IN photos saved in a chassis-number folder as compressed images and individual PDFs, along with tyre serial numbers and EV battery number.</p>
     <div id="docResults">${emptyState("Search a VIN to see its Bhilarwadi documents.")}</div></div>`;
   $("docForm").addEventListener("submit", e => { e.preventDefault(); docSearch($("docVin").value); });
   if(state.docVin){ $("docVin").value = state.docVin; const v = state.docVin; state.docVin = null; docSearch(v); }
@@ -26,9 +26,13 @@ async function docSearch(value){
     const rows = r.data || [], vins = [...new Set(rows.map(x => x.vin))];
     if(!rows.length){ box.innerHTML = emptyState("No Bhilarwadi IN entry found for this VIN."); return; }
     box.innerHTML = vins.map(vin => docCard(vin, rows.filter(x => x.vin === vin))).join("");
-    const urls = await signedUrls(rows.flatMap(x => [...inPhotoPaths(x), x.gate_pass_file]));
+    const urls = await signedUrls(rows.flatMap(x => [...inPhotoPaths(x), ...inPhotoPaths(x).filter(p => {
+      const photo = IN_PHOTOS.find(([k]) => x[k] === p);
+      return photo && inPhotoPdfAvailable(p, photo[1]);
+    }).map(inPdfPath), x.gate_pass_file]));
     box.querySelectorAll("[data-doc-img]").forEach(img => { const u = urls[img.dataset.docImg]; if(u){ img.src = u; img.closest("a").href = u; } else img.alt = "preview unavailable"; });
     box.querySelectorAll("[data-dl]").forEach(b => b.addEventListener("click", () => downloadPath(b.dataset.dl, b.dataset.name)));
+    box.querySelectorAll("[data-pdf]").forEach(b => b.addEventListener("click", () => downloadPath(b.dataset.pdf, b.dataset.name)));
     box.querySelectorAll("[data-dl-all]").forEach(b => b.addEventListener("click", async () => {
       const paths = JSON.parse(b.dataset.dlAll); b.disabled = true;
       for(const [p, n] of paths){ await downloadPath(p, n); await new Promise(r => setTimeout(r, 400)); }
@@ -40,13 +44,13 @@ function docCard(vin, list){
   return list.map(x => {
     const photos = IN_PHOTOS.filter(([k]) => x[k]);
     const tyres = [1,2,3,4].map(n => x["tyre_serial_" + n]).filter(Boolean);
-    const dlAll = photos.map(([k, l]) => [x[k], `${vin}_${l.replace(/^\d+\.\s*/, "").replace(/\s+/g, "_")}.${(x[k].split(".").pop() || "jpg")}`]);
+    const dlAll = photos.map(([k, l]) => [x[k], `${inPhotoBaseName(l)}.jpg`]);
     const detail = (l, v) => `<div class="doc-kv"><span>${esc(l)}</span><b>${esc(v || "-")}</b></div>`;
     return `<div class="doc-card"><div class="doc-head"><div><b class="mono">${esc(vin)}</b><span class="doc-sub">IN on ${esc(fmtD(x.receipt_dt || x.created_at))} • ${esc(gateLocOf(x) || "Bhilarwadi")}</span></div>
       ${photos.length ? `<button class="secondary-btn" type="button" data-dl-all='${esc(JSON.stringify(dlAll))}'>⬇ Download all photos (${photos.length})</button>` : ""}</div>
       <div class="doc-grid">${detail("Variant", x.variant)}${detail("Color", x.color)}${detail("Engine No.", x.engine_no)}${detail("Tyre serial nos.", tyres.join(", "))}${detail("EV battery no.", x.ev_battery_no)}${detail("Remarks", x.remarks)}</div>
       ${photos.length ? `<div class="doc-photos">${photos.map(([k, l]) => `<figure><a target="_blank" rel="noopener"><img data-doc-img="${esc(x[k])}" alt="${esc(l)}" class="doc-img"></a>
-        <figcaption>${esc(l.replace(/^\d+\.\s*/, ""))}</figcaption><button class="table-icon-btn" type="button" data-dl="${esc(x[k])}" data-name="${esc(vin + "_" + l.replace(/^\d+\.\s*/, "").replace(/\s+/g, "_") + "." + (x[k].split(".").pop() || "jpg"))}">⬇ Download</button></figure>`).join("")}</div>` : `<p class="form-help">No photos were uploaded for this entry.</p>`}
+        <figcaption>${esc(inPhotoBaseName(l))}</figcaption><button class="table-icon-btn" type="button" data-dl="${esc(x[k])}" data-name="${esc(inPhotoBaseName(l) + ".jpg")}">⬇ Download photo</button>${inPhotoPdfAvailable(x[k], l) ? `<button class="table-icon-btn" type="button" data-pdf="${esc(inPdfPath(x[k]))}" data-name="${esc(inPhotoBaseName(l) + ".pdf")}">⬇ Download PDF</button>` : ""}</figure>`).join("")}</div>` : `<p class="form-help">No photos were uploaded for this entry.</p>`}
       ${x.gate_pass_file ? `<div class="doc-pass"><b>Gate pass</b> <button class="table-icon-btn" type="button" data-dl="${esc(x.gate_pass_file)}" data-name="${esc("GatePass_" + vin + "_" + nameOfPath(x.gate_pass_file))}">⬇ Download</button></div>` : ""}</div>`;
   }).join("");
 }

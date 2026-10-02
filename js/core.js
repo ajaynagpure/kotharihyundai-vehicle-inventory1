@@ -30,7 +30,7 @@ const MENU = [
   {section:"ADMINISTRATION", items:[
     ["users","Users & Roles","♙"],["permissions","Permissions","⚿"],
     ["audit","Audit Logs","⌁"],
-    ["data-manage","Data Management","⛁"]
+    ["data-manage","Data Management","⛁"],["backup-restore","Backup & Restore","⇅"]
   ]},
   {section:"SETTINGS", items:[
     ["company","Company","⌂"],["locations","Locations","⌖"],
@@ -72,7 +72,7 @@ const state = {
   supabase:null, connected:false, locations:null, gateSelectedVehicleId:null
 };
 
-const ADMIN_ONLY = new Set(["data-manage"]);          // Delete / Reset tools: Admin role only
+const ADMIN_ONLY = new Set(["data-manage","backup-restore"]);          // Destructive and backup tools: Admin role only
 function can(page){
   if(state.isAdmin) return true;
   if(ADMIN_ONLY.has(page)) return false;
@@ -201,12 +201,25 @@ function statusBadge(s){ return raw(`<span class="badge ${statusClass(s)}">${esc
 // PostgREST .or()/.ilike values: remove characters that break the filter grammar
 function cleanQuery(q){ return String(q || "").replace(/[,()%*\\:"']/g," ").replace(/\s+/g," ").trim(); }
 
-/* "Saved" feedback: the Save / Import / Done button that was just pressed turns into "✓ Saved" for 2.5 s after a success toast. */
+/* A successful save briefly confirms itself on the button that started the operation. */
 let lastSaveBtn = null, lastSaveAt = 0;
-document.addEventListener("click", e => { const b = e.target.closest?.("button"); if(b && /save|import|done|update|apply/i.test(b.textContent || "")){ lastSaveBtn = b; lastSaveAt = Date.now(); } }, true);
-document.addEventListener("submit", e => { const b = e.submitter || e.target.querySelector?.('button[type="submit"],button:not([type])'); if(b){ lastSaveBtn = b; lastSaveAt = Date.now(); } }, true);
-function markSaved(){
-  const b = lastSaveBtn; if(!b || Date.now() - lastSaveAt > 60000 || b.dataset.savedShown) return;
+const SAVE_ACTION = /\b(save|import|done|update|apply|create|complete|add)\b/i;
+const SAVE_SUCCESS = /\b(saved|updated|imported|created|completed|renamed)\b/i;
+function rememberSaveButton(b){
+  if(b && SAVE_ACTION.test(b.textContent || "")){ lastSaveBtn = b; lastSaveAt = Date.now(); }
+}
+document.addEventListener("click", e => {
+  lastSaveBtn = null;
+  rememberSaveButton(e.target.closest?.("button"));
+}, true);
+document.addEventListener("submit", e => {
+  lastSaveBtn = null;
+  rememberSaveButton(e.submitter || e.target.querySelector?.('button[type="submit"],button:not([type])'));
+}, true);
+function markSaved(msg){
+  if(!SAVE_SUCCESS.test(msg)) return;
+  const b = lastSaveBtn;
+  if(!b || Date.now() - lastSaveAt > 60000 || b.dataset.savedShown) return;
   setTimeout(() => {                                   // after the handler's own "finally" has restored the label
     if(!b.isConnected || b.dataset.savedShown) return;
     const orig = b.textContent; b.dataset.savedShown = "1"; b.textContent = /import/i.test(orig) ? "✓ Imported" : "✓ Saved"; b.classList.add("is-saved");
@@ -215,7 +228,8 @@ function markSaved(){
   lastSaveBtn = null;
 }
 function toast(msg, type = "info"){
-  if(type === "success") markSaved();
+  if(type === "error") lastSaveBtn = null;
+  if(type === "success") markSaved(String(msg));
   let box = $("toastBox");
   if(!box){
     box = document.createElement("div");
@@ -521,6 +535,7 @@ async function openProfileEdit(){
     state.profile={...(state.profile||{}),username:data?.username||u,full_name:data?.full_name||n};
     $("userName").textContent=state.profile.full_name || state.profile.username;
     msg.textContent="Profile updated successfully.";msg.className="message success full";
+    toast("Profile updated.","success");
     setTimeout(close,500);
   };
 }
@@ -531,7 +546,7 @@ async function openChangePassword(){
   wrap.innerHTML = `<div class="modal-bg"><div class="modal"><div class="panel-head"><h3>Change Password</h3><button class="icon-btn" type="button" id="cpClose">×</button></div><form id="cpForm" class="form-grid"><div class="full"><label>NEW PASSWORD</label><div class="password-field"><input id="cpNew" type="password" minlength="6" required><button type="button" class="password-eye" data-password-toggle="cpNew">👁</button></div></div><div class="full"><label>CONFIRM PASSWORD</label><div class="password-field"><input id="cpConfirm" type="password" minlength="6" required><button type="button" class="password-eye" data-password-toggle="cpConfirm">👁</button></div></div><div id="cpMsg" class="message full"></div><div class="full form-actions"><button type="button" class="secondary-btn" id="cpCancel">Cancel</button><button class="primary-btn" type="submit">Change Password</button></div></form></div></div>`;
   document.body.appendChild(wrap);
   const close=()=>wrap.remove(); $("cpClose").onclick=close; $("cpCancel").onclick=close;
-  $("cpForm").onsubmit=async e=>{ e.preventDefault(); const a=$("cpNew").value,b=$("cpConfirm").value,msg=$("cpMsg"); if(a.length<6){msg.textContent="Password must be at least 6 characters.";msg.className="message error full";return;} if(a!==b){msg.textContent="Passwords do not match.";msg.className="message error full";return;} const {error}=await state.supabase.auth.updateUser({password:a}); if(error){msg.textContent=error.message;msg.className="message error full";return;} msg.textContent="Password changed successfully. Please login again with your new password.";msg.className="message success full"; setTimeout(async()=>{ try{ await state.supabase.auth.signOut({scope:"global"}); }catch(_){} close(); showLogin(); setLoginMessage("Password changed successfully. Login with your new password.","success"); },900); };
+  $("cpForm").onsubmit=async e=>{ e.preventDefault(); const a=$("cpNew").value,b=$("cpConfirm").value,msg=$("cpMsg"); if(a.length<6){msg.textContent="Password must be at least 6 characters.";msg.className="message error full";return;} if(a!==b){msg.textContent="Passwords do not match.";msg.className="message error full";return;} const {error}=await state.supabase.auth.updateUser({password:a}); if(error){msg.textContent=error.message;msg.className="message error full";return;} msg.textContent="Password changed successfully. Please login again with your new password.";msg.className="message success full"; toast("Password updated.","success"); setTimeout(async()=>{ try{ await state.supabase.auth.signOut({scope:"global"}); }catch(_){} close(); showLogin(); setLoginMessage("Password changed successfully. Login with your new password.","success"); },900); };
 }
 
 document.addEventListener("DOMContentLoaded", () => { initPasswordEyes(); init(); });

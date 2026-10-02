@@ -255,7 +255,7 @@ async function saveVehicle(e){
  e.preventDefault(); if(!state.supabase){alert("Connect Supabase first.");return;}
  const obj=Object.fromEntries(new FormData(e.target).entries()); obj.stock_value=Number(obj.stock_value||0);
  const {error}=await state.supabase.from("vehicles").insert(obj);
- if(error) alert(error.message); else {closeModal();queryVehicles();}
+ if(error) alert(error.message); else {toast("Vehicle saved.","success");closeModal();queryVehicles();}
 }
 function closeModal(){$("modal").innerHTML="";}
 
@@ -304,7 +304,7 @@ async function saveGate(e){
  f.vehicle_id=v.data.id;
  delete f.vin;
  const {error}=await state.supabase.from("gate_movements").insert(f);
- if(error)alert(error.message);else{e.target.reset();alert("Gate movement saved.");}
+ if(error)alert(error.message);else{e.target.reset();toast("Gate movement saved.","success");}
 }
 async function loadGateRegister(){
  if(!state.supabase)return;
@@ -331,7 +331,7 @@ async function saveDelivery(e){
  const {error}=await state.supabase.from("deliveries").insert(f);
  if(error){alert(error.message);return;}
  const up=await state.supabase.from("vehicles").update({status:"DELIVERED",delivery_date:f.delivery_date||new Date().toISOString().slice(0,10)}).eq("id",vehicleId);
- if(up.error)alert(up.error.message);else{e.target.reset();alert("Delivery completed.");}
+ if(up.error)alert(up.error.message);else{e.target.reset();toast("Delivery completed.","success");}
 }
 async function loadDeliveries(){
  if(!state.supabase)return;

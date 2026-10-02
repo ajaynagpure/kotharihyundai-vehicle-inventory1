@@ -39,6 +39,7 @@ async function renderAdmin(page){
   }
   if(page === "locations") return renderLocationsAdmin();
   if(page === "data-manage") return renderDataManage();
+  if(page === "backup-restore") return renderBackupRestore();
   if(["company","import-config","system-settings"].includes(page)) return renderSettingsPage(page);
   const t = {company:"Company","import-config":"Import Configuration","system-settings":"System Settings"}[page] || "Settings";
   c.innerHTML = `<div class="panel">${head(t)}<div class="notice"><b>Kothari Hyundai</b><p>No configurable options are defined for this section yet.</p></div></div>`;
@@ -65,7 +66,7 @@ async function createUser(e){
       const savePwd = await state.supabase.from("user_profiles").update({password_display:f.password}).eq("id", createdId).select("id");
       if(savePwd.error) console.warn("Password display could not be saved:", savePwd.error.message);
     }
-    say(`User ${out.user?.username || f.username} created.`,"success"); e.target.reset(); logAudit("CREATE_USER","users","user",out.user?.id,{username:f.username}); loadUsers();
+    say(`User ${out.user?.username || f.username} created.`,"success"); toast("User created.","success"); e.target.reset(); logAudit("CREATE_USER","users","user",out.user?.id,{username:f.username}); loadUsers();
   } catch { say("Cannot reach the create-user function. Is it deployed?","error"); }
 }
 async function loadUsers(){
@@ -176,6 +177,7 @@ async function renderPermissions(){
       else if(cb.checked) grantsByRole.get(role.id).add(permission.id);
       else grantsByRole.get(role.id).delete(permission.id);
       logAudit("PERMISSION","permissions","role",cb.dataset.r,{permission:permission.code, allowed:cb.checked});
+      toast("Permission saved.","success");
     }
   }));
 }
