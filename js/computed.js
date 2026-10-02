@@ -51,15 +51,15 @@ function groupStock(vehicles, keyOf){
   const g = new Map();
   vehicles.filter(v => !["delivered","cancelled"].includes(vStage(v))).forEach(v => {
     const k = keyOf(v) || "Not Available";
-    const x = g.get(k) || {key:k, stock_count:0, in_transit_count:0, pending_count:0, bill_count:0, stock_value:0, in_transit_value:0};
+    const x = g.get(k) || {key:k, stock_count:0, in_transit_count:0, pending_count:0, bill_count:0, stock_value:0, in_transit_value:0, bill_value:0};
     const st = vStage(v);
     if(st === "pending") x.pending_count++;
-    else if(st === "bill") x.bill_count++;
+    else if(st === "bill"){ x.bill_count++; x.bill_value += vValue(v); }
     else if(st === "transit"){ x.in_transit_count++; x.in_transit_value += vValue(v); }
     else { x.stock_count++; x.stock_value += vValue(v); }
     g.set(k, x);
   });
-  return [...g.values()].map(x => ({...x, vehicle_count: x.stock_count + x.in_transit_count + x.pending_count + x.bill_count}));
+  return [...g.values()].map(x => ({...x, vehicle_count: x.stock_count + x.in_transit_count + x.pending_count + x.bill_count, total_value: x.stock_value + x.in_transit_value + x.bill_value}));
 }
 // Ageing limits come from System Settings (default 30 / 60 / 90 days).
 function ageLimits(){ const s = (typeof state !== "undefined" && state.settings?.sys) || {}, n = (k, d) => { const x = parseInt(s[k], 10); return x > 0 ? x : d; };

@@ -12,7 +12,7 @@ const REPORTS = {
   "model-report": {title:"Model Stock", source:"model_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"model",
     cols:[col("Model","model"), ...STOCK_COLS]},
   "finance-report": {title:"Finance wise Free Stock", source:"finance_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"finance",
-    cols:[col("Financier Name","finance_company"), ...STOCK_COLS]},
+    cols:[col("Financier Name","finance_company"), col("Free Stock","stock_count","num"), col("Free Value","stock_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("Grand Total Value","total_value","money")]},
   "dealer-report": {title:"Dealer Code wise Free Stock", source:"dealer_code_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"dealer",
     cols:[col("Dealer","dealer_code"), ...STOCK_COLS]},
   "aging-report": {editable:true, title:"Aging Report", source:"aging_report", sort:["aging_days","desc"],
@@ -75,7 +75,7 @@ function renderDashboard(){
   <div class="panel"><div class="panel-head"><h3>Financier Name wise Stock</h3>${link("finance-report","View Report")}</div><div id="financeDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   <div class="grid-2">
     <div class="panel"><div class="panel-head"><h3>Dealer code wise free stock</h3>${link("dealer-report","View Report")}</div><div id="dealerDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
-    <div class="panel"><div class="panel-head"><h3>Status wise stock</h3>${link("status","Open")}</div><div id="statusDash" class="pie-wrap">${emptyState("Loading...")}</div></div>
+    <div class="panel status-panel"><div class="panel-head"><h3>Status wise stock</h3>${link("status","Open")}</div><div id="statusDash" class="pie-wrap">${emptyState("Loading...")}</div></div>
   </div>
   <div class="panel"><div class="panel-head"><h3>Location wise stock</h3>${link("location-report","View Report")}</div><div id="locationTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   <div class="panel"><div class="panel-head"><h3>Delivered by Model and Location</h3>${link("delivery-report","View Report")}</div><div id="deliveredModelLocation" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
@@ -98,12 +98,23 @@ async function getStatusSummary(){
 function pieHtml(items){                   // donut chart (inline SVG) + clickable legend
   const total = items.reduce((t, i) => t + i.count, 0); if(!total) return emptyState("No stock data yet. Import the Order / Purchase report to begin.");
   const cx = 90, cy = 90, R = 84, r = 50; let a0 = -Math.PI / 2;
-  const paths = items.map((it, i) => { const fr = it.count / total, col = PIE_COLORS[i % PIE_COLORS.length], tip = `${it.status}: ${it.count} (${(fr*100).toFixed(1)}%)`;
-    if(fr >= 0.9999) return `<path d="M${cx} ${cy-R} A${R} ${R} 0 1 1 ${cx-.01} ${cy-R} L${cx-.01} ${cy-r} A${r} ${r} 0 1 0 ${cx} ${cy-r} Z" fill="${col}" data-dim="status" data-key="${esc(it.status)}" data-stage="all"><title>${esc(tip)}</title></path>`;
-    const a1 = a0 + fr * 2 * Math.PI, p = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(2)} ${(cy + rad * Math.sin(a)).toFixed(2)}`, big = fr > 0.5 ? 1 : 0;
-    const d = `M${p(R,a0)} A${R} ${R} 0 ${big} 1 ${p(R,a1)} L${p(r,a1)} A${r} ${r} 0 ${big} 0 ${p(r,a0)} Z`; a0 = a1;
-    return `<path d="${d}" fill="${col}" stroke="#fff" stroke-width="1.5" data-dim="status" data-key="${esc(it.status)}" data-stage="all" class="pie-slice"><title>${esc(tip)}</title></path>`; }).join("");
-  return `<div class="pie-box"><svg viewBox="0 0 180 180" class="pie-svg" role="img" aria-label="Status wise stock">${paths}<text x="90" y="86" text-anchor="middle" class="pie-total">${total.toLocaleString("en-IN")}</text><text x="90" y="103" text-anchor="middle" class="pie-sub">vehicles</text></svg>
+  const shade = hex => "#" + [1,3,5].map(i => Math.round(parseInt(hex.slice(i,i+2),16) * .62).toString(16).padStart(2,"0")).join("");
+  const slices = items.map((it, i) => {
+    const fr = it.count / total, col = PIE_COLORS[i % PIE_COLORS.length], tip = `${it.status}: ${it.count} (${(fr*100).toFixed(1)}%)`;
+    let d;
+    if(fr >= 0.9999) d = `M${cx} ${cy-R} A${R} ${R} 0 1 1 ${cx-.01} ${cy-R} L${cx-.01} ${cy-r} A${r} ${r} 0 1 0 ${cx} ${cy-r} Z`;
+    else {
+      const a1 = a0 + fr * 2 * Math.PI, p = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(2)} ${(cy + rad * Math.sin(a)).toFixed(2)}`, big = fr > 0.5 ? 1 : 0;
+      d = `M${p(R,a0)} A${R} ${R} 0 ${big} 1 ${p(R,a1)} L${p(r,a1)} A${r} ${r} 0 ${big} 0 ${p(r,a0)} Z`;
+      a0 = a1;
+    }
+    return {
+      depth:`<path d="${d}" fill="${shade(col)}" stroke="${shade(col)}" stroke-width="1"/>`,
+      top:`<path d="${d}" fill="${col}" stroke="#fff" stroke-width="1.5" data-dim="status" data-key="${esc(it.status)}" data-stage="all" class="pie-slice"><title>${esc(tip)}</title></path>`
+    };
+  });
+  const depth = slices.map(s => s.depth).join(""), paths = slices.map(s => s.top).join("");
+  return `<div class="pie-box"><svg viewBox="0 0 180 192" class="pie-svg" role="img" aria-label="Status-wise stock: ${total.toLocaleString("en-IN")} vehicles"><circle class="pie-track" cx="90" cy="90" r="84"></circle><g class="pie-depth" transform="translate(0 10)" aria-hidden="true">${depth}</g>${paths}<circle class="pie-center" cx="90" cy="90" r="48"></circle><text x="90" y="86" text-anchor="middle" class="pie-total">${total.toLocaleString("en-IN")}</text><text x="90" y="103" text-anchor="middle" class="pie-sub">TOTAL VEHICLES</text></svg>
     <div class="pie-legend">${items.map((it, i) => `<button type="button" class="pie-row" data-dim="status" data-key="${esc(it.status)}" data-stage="all"><i style="background:${PIE_COLORS[i % PIE_COLORS.length]}"></i><span class="pie-name">${esc(it.status)}</span><b>${it.count.toLocaleString("en-IN")}</b><em>${((it.count/total)*100).toFixed(1)}%</em><span class="pie-val">${moneyShort(it.value)}</span></button>`).join("")}</div></div>`;
 }
 
@@ -130,10 +141,10 @@ async function loadDashboardData(){
       el.innerHTML = groups.length ? table(headers, groups.map(mapper), footer(groups)) : emptyState("No records found."); bindDim(el); };
     const tot = (gs, set, k) => gs.reduce((t, g) => t + g[set][k], 0);
 
-    // 6. Finance wise stock: counts and values for Free Stock, In Transit and Tally Done
+    // 6. Finance wise stock: counts and combined value for Free Stock, In Transit and Tally Done
     const fin = stageGroup(all, DIMS.finance.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => (b.n.stock + b.n.transit + b.n.bill) - (a.n.stock + a.n.transit + a.n.bill));
     const financeTotalValue = g => g.v.stock + g.v.transit + g.v.bill;
-    draw("financeDash", ["Financier Name","Free Stock","Value","In Transit","Value","Tally Done","Value","Total Value"], fin,
+    draw("financeDash", ["Financier Name","Free Stock","Free Value","In Transit","In Transit Value","Tally Done","Tally Done Value","Grand Total Value"], fin,
       g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"finance",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"finance",g.key,"bill"), moneyShort(g.v.bill), moneyShort(financeTotalValue(g))],
       gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), MS(gs.reduce((t,g) => t + financeTotalValue(g), 0))]);
     // 7. Dealer code wise: available, in transit, bill / not delivered (count + short value)
@@ -448,7 +459,7 @@ async function renderReport(page){
     <div class="report-tools">${filterBtn("repFilter")}<button class="secondary-btn" type="button" id="reportExport">⤓ Export</button></div></div>
     ${filterPanel("repFilter", `<div class="filter-grid"><label>Search rows<input id="reportFilter" type="search" placeholder="Type to filter…" aria-label="Filter rows"></label></div>`)}
     <p id="reportMeta" class="form-help"></p>
-    <div class="table-wrap" id="reportTable">${emptyState("Loading live report...")}</div></div>`;
+    <div class="table-wrap${page === "finance-report" ? " finance-report-table" : ""}" id="reportTable">${emptyState("Loading live report...")}</div></div>`;
   $("reportFilter").addEventListener("input", drawReport);
   $("reportExport").addEventListener("click", () => {
     const rows = reportRows(def, REPORT.rows, $("reportFilter").value);
@@ -462,6 +473,12 @@ async function loadReport(page){
   if(!state.supabase){ $("reportTable").innerHTML = emptyState("Connect Supabase to load live report."); return; }
   try {
     const rows = await computedRows(def.source);
+    if(page === "finance-report"){
+      REPORT.rows = rows.filter(r => r.stock_count + r.in_transit_count + r.bill_count > 0)
+        .sort((a,b) => (b.stock_count + b.in_transit_count + b.bill_count) - (a.stock_count + a.in_transit_count + a.bill_count));
+      drawReport();
+      return;
+    }
     if(def.dim === "location") rows.sort((a,b) => compareLocationNames(a.location_name,b.location_name));
     else if(def.sort){ const [k,dir] = def.sort; rows.sort((a,b) => { const x = a[k], y = b[k];
       const c = (typeof x === "number" && typeof y === "number") ? x - y : String(x ?? "").localeCompare(String(y ?? "")); return dir === "desc" ? -c : c; }); }
