@@ -7,6 +7,7 @@ async function renderAdmin(page){
     c.innerHTML = `<div class="panel">${head("Create User")}<form id="createUserForm" class="form-grid">
       <div><label>USERNAME</label><input name="username" required placeholder="accounts01"></div>
       <div><label>FULL NAME</label><input name="full_name" required></div>
+      <div><label>EMAIL ADDRESS</label><input name="email" type="email" required placeholder="name@kotharihyundai.co.in" autocomplete="email"></div>
       <div><label>PASSWORD</label><div class="password-field"><input id="newUserPassword" name="password" required type="password" minlength="6" maxlength="12" placeholder="6 to 12 characters"><button type="button" class="password-eye" data-password-toggle="newUserPassword" aria-label="Show password" title="Show password">👁</button></div></div>
       <div><label>ROLE</label><select name="role_id" id="newUserRole" required></select></div>
       <div><label>LOCATION</label><select name="location_id" id="newUserLocation" required></select></div>
@@ -57,7 +58,7 @@ async function createUser(e){
   try {
     const res = await fetch(`${SUPABASE_CONFIG.url}/functions/v1/create-user`, {method:"POST",
       headers:{"Content-Type":"application/json", "Authorization":`Bearer ${session.access_token}`, "apikey":SUPABASE_CONFIG.anonKey},
-      body:JSON.stringify({username:normalizeUsername(f.username), full_name:f.full_name.trim(), password:f.password, role_id:f.role_id, location_id:f.location_id||null, active:f.active==="true"})});
+      body:JSON.stringify({username:normalizeUsername(f.username), full_name:f.full_name.trim(), email:f.email.trim().toLowerCase(), password:f.password, role_id:f.role_id, location_id:f.location_id||null, active:f.active==="true"})});
     const out = await res.json().catch(() => ({}));
     if(!res.ok) return say(out.error || "Unable to create user.","error");
     
@@ -72,14 +73,14 @@ async function createUser(e){
 async function loadUsers(){
   if(!$("usersTable")) return;
   await getLocations();
-  const [r, rl] = await Promise.all([state.supabase.from("user_profiles").select("id,username,full_name,password_display,active,created_at,role_id,roles(name),location_id").order("created_at",{ascending:false}),
+  const [r, rl] = await Promise.all([state.supabase.from("user_profiles").select("id,username,full_name,email,password_display,active,created_at,role_id,roles(name),location_id").order("created_at",{ascending:false}),
     state.supabase.from("roles").select("id,name").order("name")]);
   const ad = state.isAdmin, list = r.data || [], roles = rl.data || [];
   const roleSel = x => raw(`<select class="inline-sel" data-u-role="${esc(x.id)}" ${ad ? "" : "disabled"}>${roles.map(o => `<option value="${esc(o.id)}" ${o.id === x.role_id ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>`);
   const statSel = x => raw(`<select class="inline-sel" data-u-active="${esc(x.id)}" ${ad ? "" : "disabled"}><option value="true" ${x.active === false ? "" : "selected"}>Active</option><option value="false" ${x.active === false ? "selected" : ""}>Inactive</option></select>`);
   const pwdCell = x => raw(`<div class="password-field table-password"><input id="pwd_${esc(x.id)}" type="password" value="${esc(x.password_display || "")}" placeholder="Not available" readonly><button type="button" class="password-eye" data-password-toggle="pwd_${esc(x.id)}" aria-label="Show password" title="Show password">👁</button></div>`);
   $("usersTable").innerHTML = r.error ? emptyState(r.error.message) :
-    table(["Username","Name","Password","Role","Location","Status","Created",...(ad ? ["Action"] : [])], list.map((x,i) => [x.username,x.full_name,pwdCell(x),roleSel(x),x.location_id?locName(x.location_id):"All Locations",statSel(x),fmtDT(x.created_at),
+    table(["Username","Name","Email","Password","Role","Location","Status","Created",...(ad ? ["Action"] : [])], list.map((x,i) => [x.username,x.full_name,x.email||"-",pwdCell(x),roleSel(x),x.location_id?locName(x.location_id):"All Locations",statSel(x),fmtDT(x.created_at),
       ...(ad ? [raw(`<button class="table-icon-btn" type="button" data-user-edit="${i}" title="Edit">✎</button><button class="table-icon-btn danger" type="button" data-user-del="${i}" title="Delete user">🗑</button>`)] : [])]));
   const box = $("usersTable");
   box.querySelectorAll("[data-password-toggle]").forEach(b => b.addEventListener("click", () => {

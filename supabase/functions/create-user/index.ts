@@ -162,6 +162,10 @@ Deno.serve(async (req) => {
     body.full_name ?? ""
   ).trim();
 
+  const email = String(
+    body.email ?? ""
+  ).trim().toLowerCase();
+
   const password = String(
     body.password ?? ""
   );
@@ -188,16 +192,21 @@ Deno.serve(async (req) => {
   if (
     !username ||
     !fullName ||
+    !email ||
     !password ||
     !roleId
   ) {
     return json(
       {
         error:
-          "Username, full name, password and role are required.",
+          "Username, full name, email, password and role are required.",
       },
       400
     );
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return json({ error: "Enter a valid email address." }, 400);
   }
 
   // Password 6 to 12 characters
@@ -345,11 +354,11 @@ Deno.serve(async (req) => {
   }
 
   // =====================================================
-  // INTERNAL AUTH EMAIL
+  // AUTH EMAIL: use the real email entered by Admin.
+  // This is what Supabase Authentication > Users will show.
   // =====================================================
 
-  const authEmail =
-    `${username}@login.kotharihyundai.local`;
+  const authEmail = email;
 
   // =====================================================
   // CREATE AUTH USER
@@ -366,6 +375,7 @@ Deno.serve(async (req) => {
       user_metadata: {
         username,
         full_name: fullName,
+        email,
       },
     });
 
@@ -404,12 +414,13 @@ Deno.serve(async (req) => {
       id: newUserId,
       username,
       full_name: fullName,
+      email,
       role_id: roleId,
       location_id: locationId,
       active,
     })
     .select(
-      "id, username, full_name, role_id, location_id, active"
+      "id, username, full_name, email, role_id, location_id, active"
     )
     .single();
 

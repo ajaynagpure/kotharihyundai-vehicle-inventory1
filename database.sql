@@ -817,6 +817,7 @@ create table if not exists public.user_profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text not null,
   full_name text,
+  email text,
   role_id uuid references public.roles(id),
   location_id uuid references public.locations(id),
   active boolean not null default true,
@@ -829,6 +830,9 @@ alter table public.user_profiles
 
 alter table public.user_profiles
   add column if not exists full_name text;
+
+alter table public.user_profiles
+  add column if not exists email text;
 
 alter table public.user_profiles
   add column if not exists role_id uuid references public.roles(id);
@@ -1311,3 +1315,23 @@ BEGIN
 END $$;
 
 NOTIFY pgrst, 'reload schema';
+
+
+-- ============================================================
+-- REAL USER EMAIL SUPPORT (2026-10 update)
+-- New users must be created with their real email address.
+-- Existing synthetic @login.kotharihyundai.local accounts are left unchanged
+-- until edited/recreated, because a real email cannot be guessed safely.
+-- ============================================================
+alter table public.user_profiles add column if not exists email text;
+create unique index if not exists user_profiles_email_uidx
+  on public.user_profiles(lower(email)) where email is not null;
+
+-- Copy real Auth emails into profiles for existing users when they are not synthetic.
+update public.user_profiles up
+set email = au.email
+from auth.users au
+where au.id = up.id
+  and au.email is not null
+  and au.email not like '%@login.kotharihyundai.local'
+  and (up.email is null or up.email = '');
