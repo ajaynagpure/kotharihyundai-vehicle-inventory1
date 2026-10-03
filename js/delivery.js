@@ -110,23 +110,26 @@ async function saveDelivery(e){
 /* ---------------------------------------------------------------- Delivered Vehicles / Delivery History */
 const delCell = (v, [, k, t]) => t === "date" ? fmtD(v[k]) : (v[k] ?? "");
 function delFiltered(){
-  const q = DEL.q.trim().toLowerCase();
+  const q = delVin(DEL.q);
   return DEL.rows.filter(v => {
     const d = String(v.delivery_date || "").slice(0, 10);
     if(DEL.from && (!d || d < DEL.from)) return false;
     if(DEL.to && (!d || d > DEL.to)) return false;
     if(DEL.loc && v.dloc !== DEL.loc) return false;
-    return !q || DEL_COLS.some(c => String(v[c[1]] ?? "").toLowerCase().includes(q));
+    return !q || delVin(v.vin).includes(q);
   });
 }
 async function renderDeliveryList(page, title){
   DEL.from = DEL.to = DEL.loc = DEL.q = "";
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>${esc(title)}</h3>
-    <div class="report-tools">${filterBtn("delFilter")}<button class="secondary-btn" type="button" id="delExport">⤓ Export to Excel</button></div></div>
-    ${filterPanel("delFilter", `<div class="filter-grid"><label>From date<input id="delFrom" type="date"></label><label>To date<input id="delTo" type="date"></label>
-      <label>Delivery location<select id="delLoc"><option value="">All locations</option></select></label>
-      <label>Search<input id="delQ" type="search" placeholder="VIN, customer, model, bill no…"></label></div>
-      <div class="form-actions"><button class="secondary-btn" type="button" id="delClear">Clear filter</button></div>`, true)}
+    <div class="report-tools"><button class="secondary-btn" type="button" id="recentDeliveryToggle" aria-expanded="false">Recent Delivery Entries</button><button class="secondary-btn" type="button" id="delExport">⤓ Export to Excel</button></div></div>
+    <section id="recentDeliverySection" class="timeline-recent delivery-recent" hidden><div id="recentDeliveryResults" class="table-wrap">${emptyState("Loading recent delivery entries...")}</div></section>
+    <div class="delivery-filter-row">
+      <label class="delivery-vin-search">Search VIN<input id="delQ" type="search" placeholder="Enter VIN / last 6 digits" autocomplete="off"></label>
+      <label class="delivery-location-filter">Delivery location<select id="delLoc"><option value="">All locations</option></select></label>
+      <div class="delivery-date-filters"><label>From date<input id="delFrom" type="date"></label><label>To date<input id="delTo" type="date"></label></div>
+      <button class="secondary-btn delivery-clear-filter" type="button" id="delClear">Clear</button>
+    </div>
     <p id="delMeta" class="form-help"></p><div id="deliveryResults">${emptyState("Loading...")}</div></div>`;
   await loadDeliveries();
 }
@@ -148,6 +151,12 @@ async function loadDeliveries(){
       }});
     const meta = () => { $("delMeta").textContent = `${delFiltered().length.toLocaleString("en-IN")} of ${DEL.rows.length.toLocaleString("en-IN")} delivered vehicles`; };
     const apply = () => { DEL.from = $("delFrom").value; DEL.to = $("delTo").value; DEL.loc = $("delLoc").value; DEL.q = $("delQ").value; meta(); pg.reset(); };
+    $("recentDeliveryToggle").onclick = async () => {
+      const section = $("recentDeliverySection"), button = $("recentDeliveryToggle");
+      section.hidden = !section.hidden;
+      button.setAttribute("aria-expanded", String(!section.hidden));
+      if(!section.hidden) await loadRecentDeliveryEntries(DEL.rows);
+    };
     ["delFrom","delTo","delLoc","delQ"].forEach(id => { $(id).oninput = apply; $(id).onchange = apply; });
     $("delClear").onclick = () => { ["delFrom","delTo","delLoc","delQ"].forEach(id => { $(id).value = ""; }); apply(); };
     $("delExport").onclick = () => {
@@ -156,6 +165,30 @@ async function loadDeliveries(){
     };
     apply();
   } catch(err){ box.innerHTML = emptyState("Could not load: " + (err.message || err)); }
+}
+async function loadRecentDeliveryEntries(vehicles){
+  const box = $("recentDeliveryResults");
+  if(!box) return;
+  try {
+    const rows = await fetchAll(() => state.supabase.from("deliveries").select("*").order("created_at",{ascending:false}), {max:50000});
+    const deliveryById = new Map(rows.map(d => [String(d.vehicle_id),d]));
+    const entries = vehicles.map(vehicle => {
+      const d = deliveryById.get(String(vehicle.id)) || {};
+      return {...vehicle,...d,vin:vehicle.vin || d.vin || "",delivery_date:d.delivery_date || vehicle.delivery_date || d.created_at,
+        dloc:d.delivery_location || vehicle.delivery_location || (vehicle.location_id ? locName(vehicle.location_id) : "")};
+    }).filter(row => row.vin && vStage(row) === "delivered")
+      .sort((a,b) => String(b.delivery_date || b.created_at || "").localeCompare(String(a.delivery_date || a.created_at || "")));
+    mountPaged(box,{
+      headers:["Delivery Date","VIN","Delivered Vehicle","Delivery Status","Customer","Tally Invoice No","Delivery Location"],
+      rows:entries.map(v => [
+        fmtD(v.delivery_date),raw(`<b class="mono">${esc(v.vin)}</b>`),v.model || v.variant || "-",
+        statusBadge(v.status || "Delivered"),v.customer_name || "-",v.bill_no || "-",v.dloc || "-"
+      ]),
+      size:10,empty:"No delivered vehicles found."
+    });
+  } catch(err){
+    box.innerHTML = emptyState("Could not load recent delivery entries: " + (err.message || err));
+  }
 }
 
 /* ---------------------------------------------------------------- Edit / Delete delivery entry */
@@ -193,7 +226,7 @@ async function delEdit(id){
 async function delDelete(id){
   const v = DEL.rows.find(x => String(x.id) === String(id)); if(!v) return;
   const back = (!isBlank(v.bill_no) || !isBlank(v.sales_imported_at)) ? "Tally Done" : v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";
-  if(!confirm(`Delete the delivery entry of ${v.vin}?\n\nThe vehicle goes back to "${back}". The vehicle record itself is kept.`)) return;
+  if(!confirm(`Delete the delivery entry of ${v.vin}?\n\nThe vehicle goes back to "${statusLabel(back)}". The vehicle record itself is kept.`)) return;
   const sb = state.supabase; importDropped.clear();
   const d = await sb.from("deliveries").delete().eq("vehicle_id", v.id).select("vehicle_id");
   if(d.error) return toast(d.error.message, "error");

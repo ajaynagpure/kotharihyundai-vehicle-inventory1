@@ -16,7 +16,7 @@ const MENU = [
   ]},
   {section:"GATE MANAGEMENT", items:[
     ["bhilarwadi","Bhilarwadi In","⇄"],["gate","Branch Vehicle In / Out","⇄"],
-    ["gate-pass","Gate Pass","▣"],["register","In-Out Register","☷"]
+    ["register","In-Out Register","☷"]
   ]},
   {section:"DELIVERY", items:[
     ["delivery-entry","Delivery Entry","✓"],["delivered","Delivered Vehicles","✓"],["delivery-history","Delivery History","◷"]
@@ -195,9 +195,11 @@ function statusClass(s){
   if(k.includes("transit")) return "info";
   if(k.includes("tally") || /not[\s\-_\/]*deliver|undeliver/.test(k) || k.includes("bill") || k.includes("sales") || k.includes("sold")) return "purple";   // Tally Done
   if(k.includes("deliver")) return "ok";
+  if(k.includes("stock") || k.includes("available")) return "stock";
   return "";
 }
-function statusBadge(s){ return raw(`<span class="badge ${statusClass(s)}">${esc(s || "-")}</span>`); }
+function statusLabel(s){ return String(s || "-").toLowerCase() === "in stock" ? "Free Stock" : String(s || "-"); }
+function statusBadge(s){ return raw(`<span class="badge ${statusClass(s)}">${esc(statusLabel(s))}</span>`); }
 // PostgREST .or()/.ilike values: remove characters that break the filter grammar
 function cleanQuery(q){ return String(q || "").replace(/[,()%*\\:"']/g," ").replace(/\s+/g," ").trim(); }
 

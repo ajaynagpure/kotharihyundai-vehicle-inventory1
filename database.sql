@@ -19,7 +19,7 @@ NOTIFY pgrst, 'reload schema';
 -- ============================================================
 -- SOURCE: GATE_IN_DETAILS.sql
 -- ============================================================
--- Bhilarwadi Vehicle IN details: 7 compressed photos and individual PDFs (private bucket) + 4 tyre serials + EV battery. Safe to re-run.
+-- Bhilarwadi Vehicle IN details: 8 compressed photos and individual PDFs (private bucket) + 4 tyre serials + EV battery. Safe to re-run.
 ALTER TABLE public.gate_movements
   ADD COLUMN IF NOT EXISTS photo_front text,
   ADD COLUMN IF NOT EXISTS photo_chassis_no text,
@@ -28,6 +28,7 @@ ALTER TABLE public.gate_movements
   ADD COLUMN IF NOT EXISTS photo_cng_cert text,
   ADD COLUMN IF NOT EXISTS photo_cng_kit text,
   ADD COLUMN IF NOT EXISTS photo_ecu text,
+  ADD COLUMN IF NOT EXISTS photo_right_side_qr text,
   ADD COLUMN IF NOT EXISTS tyre_serial_1 text,
   ADD COLUMN IF NOT EXISTS tyre_serial_2 text,
   ADD COLUMN IF NOT EXISTS tyre_serial_3 text,

@@ -10,11 +10,57 @@ const GATEPASS_SQL_HINT = "Run NEW_FEATURES.sql once in Supabase SQL Editor (add
 /* ---------------------------------------------------------------- Bhilarwadi documents */
 async function renderDocuments(){
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Bhilarwadi Documents</h3></div>
-    <form id="docForm" class="toolbar"><div class="searchbox"><input id="docVin" placeholder="Search VIN / last 6 digits" autocomplete="off" aria-label="Search VIN"><button type="submit">Search</button></div></form>
-    <p class="form-help">Shows Bhilarwadi IN photos saved in a chassis-number folder as compressed images and individual PDFs, along with tyre serial numbers and EV battery number.</p>
-    <div id="docResults">${emptyState("Search a VIN to see its Bhilarwadi documents.")}</div></div>`;
+    <form id="docForm" class="doc-search-form"><div class="searchbox doc-search-box"><input id="docVin" placeholder="Enter VIN / last 6 digits to view documents" autocomplete="off" aria-label="Search VIN"><button type="submit">Search VIN</button></div></form>
+    <p class="form-help">Search a VIN to open its Bhilarwadi documents, or choose View Documents from the vehicle list.</p>
+    <div id="docResults"></div>
+    <section class="timeline-recent"><h3>Vehicles IN at Bhilarwadi (Not Delivered)</h3><div id="docBhilarwadiStock" class="table-wrap">${emptyState("Loading vehicles...")}</div></section>
+    <p class="form-help">The vehicle list excludes delivered vehicles. Documents include Bhilarwadi IN photos, tyre serial numbers and EV battery number.</p></div>`;
   $("docForm").addEventListener("submit", e => { e.preventDefault(); docSearch($("docVin").value); });
+  loadBhilarwadiVehicleList();
   if(state.docVin){ $("docVin").value = state.docVin; const v = state.docVin; state.docVin = null; docSearch(v); }
+}
+async function loadBhilarwadiVehicleList(){
+  const box = $("docBhilarwadiStock");
+  if(!box) return;
+  if(!state.supabase){ box.innerHTML = emptyState("Connect to Supabase to load Bhilarwadi vehicles."); return; }
+  try {
+    const [movements, vehicles] = await Promise.all([
+      fetchAll(() => state.supabase.from("gate_movements").select("*")
+        .eq("gate_name","Bhilarwadi").eq("movement_type","IN").order("created_at",{ascending:false}), {max:50000}),
+      allVehicles(true)
+    ]);
+    const vehicleById = new Map(vehicles.map(v => [String(v.id),v]));
+    const vehicleByVin = new Map(vehicles.filter(v => v.vin).map(v => [String(v.vin).toUpperCase(),v]));
+    const latestByVin = new Map();
+    movements.forEach(m => {
+      const vin = String(m.vin || vehicleById.get(String(m.vehicle_id))?.vin || "").trim().toUpperCase();
+      if(!vin || latestByVin.has(vin)) return;
+      const vehicle = vehicleById.get(String(m.vehicle_id)) || vehicleByVin.get(vin);
+      if(vehicle && vStage(vehicle) === "delivered") return;
+      latestByVin.set(vin,{...m,vin,vehicle});
+    });
+    const entries = [...latestByVin.values()];
+    mountPaged(box,{
+      headers:["IN Date","VIN","Location","Model","Status",""],
+      rows:entries.map((x,i) => [
+        fmtD(x.receipt_dt || x.created_at),
+        raw(`<b class="mono">${esc(x.vin)}</b>`),
+        gateLocOf(x) || "Bhilarwadi",
+        x.vehicle?.model || x.variant || "-",
+        statusBadge(x.vehicle?.status || "In Stock"),
+        raw(`<button type="button" class="table-icon-btn doc-status-btn ${IN_REQUIRED_PHOTOS.every(([key]) => Boolean(x[key])) ? "doc-status-complete" : "doc-status-missing"}" data-doc-stock="${i}" title="${IN_REQUIRED_PHOTOS.every(([key]) => Boolean(x[key])) ? "Mandatory photos complete" : "Mandatory photos missing"}">View Documents</button>`)
+      ]),
+      size:25,empty:"No undelivered vehicles received at Bhilarwadi.",
+      onDraw:el => el.querySelectorAll("[data-doc-stock]").forEach(button => button.addEventListener("click",() => {
+        const entry = entries[Number(button.dataset.docStock)];
+        if(!entry) return;
+        $("docVin").value = entry.vin;
+        docSearch(entry.vin);
+      }))
+    });
+  } catch(err){
+    box.innerHTML = emptyState("Could not load Bhilarwadi vehicles: " + err.message);
+  }
 }
 async function docSearch(value){
   const box = $("docResults"), q = cleanQuery(value).replace(/\s+/g, "").toUpperCase();
@@ -58,7 +104,7 @@ function docCard(vin, list){
 /* ---------------------------------------------------------------- Gate pass (uploaded photos) */
 async function renderGatePass(){
   $("content").innerHTML = `<div class="panel gate-recent-panel"><div class="gate-recent-head"><h3>Gate Pass</h3>
-    <div class="filter-wrap">${filterBtn("gpFilter")}<button class="secondary-btn" type="button" id="gpRefresh">↻ Refresh</button></div></div>
+    <div class="filter-wrap">${filterBtn("gpFilter")}<button class="secondary-btn" type="button" id="gpRefresh" aria-label="Refresh" title="Refresh">↻</button></div></div>
     ${filterPanel("gpFilter", `<div class="filter-grid"><label>VIN / last 6 digits<input id="gateSearchText" type="search" placeholder="VIN"></label>
       <label>Movement<select id="gateMovementFilter"><option value="ALL">All</option><option value="IN">IN</option><option value="OUT">OUT</option></select></label>
       <label>From date<input id="gateFromDate" type="date"></label><label>To date<input id="gateToDate" type="date"></label>

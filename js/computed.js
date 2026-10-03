@@ -83,29 +83,9 @@ async function gateRowsFallback(){
       from_location:x.from_location || (inbound ? "" : loc), to_location:x.to_location || (inbound ? loc : "")};
   });
 }
-function awaitingArrivalRows(vehicles, movements){
-  const vehicleById = new Map(vehicles.map(v => [String(v.id), v]));
-  const vehicleByVin = new Map(vehicles.map(v => [String(v.vin || "").replace(/\s+/g,"").toUpperCase(), v]).filter(([vin]) => vin));
-  const historyByVin = new Map();
-  movements.forEach(r => {
-    const key = String(r.vin || r.vehicle_no || "").replace(/\s+/g,"").toUpperCase();
-    if(key){ if(!historyByVin.has(key)) historyByVin.set(key, []); historyByVin.get(key).push(r); }
-  });
-  return [...historyByVin.entries()].flatMap(([key, history]) => {
-    history.sort((a,b) => String(a.created_at || a.movement_time || a.receipt_dt || "").localeCompare(String(b.created_at || b.movement_time || b.receipt_dt || "")));
-    const lastIndex = history.length - 1, r = history[lastIndex];
-    if(!r || String(r.movement_type || "").toUpperCase() !== "OUT") return [];
-    const outLocation = String(r.location_name || r.from_location || "").trim();
-    if(!outLocation) return [];
-    const vehicle = (r.vehicle_id && vehicleById.get(String(r.vehicle_id))) || vehicleByVin.get(key);
-    if(!vehicle || !["stock","bill"].includes(vStage(vehicle))) return [];
-    return [{...r, id:vehicle.id, vin:r.vin || vehicle.vin, model:vehicle.model, status:vehicle.status,
-      stock_value:vehicle.stock_value, in_location:String(r.to_location || "").trim(), out_location:outLocation}];
-  });
-}
 async function computedRows(source){
   if(source === "gate_movement_report") return gateRowsFallback();
-  if(source === "awaiting_arrival_report") return awaitingArrivalRows(await allVehicles(), await gateRowsFallback());
+  if(source === "awaiting_arrival_report") return [];
   const all = await allVehicles();
   await getLocations();
   switch(source){

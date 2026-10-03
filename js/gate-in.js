@@ -1,13 +1,13 @@
 "use strict";
 /* =====================================================================
-   BHILARWADI "VEHICLE IN" DETAILS (7 photos + 4 tyre serials + EV battery)
+   BHILARWADI "VEHICLE IN" DETAILS (8 photos + 4 tyre serials + EV battery)
    and the Gate Pass print bar shown right after a save. Loaded after gate-bulk.js.
    ===================================================================== */
 const GATE_BUCKET = "gate-photos";
 const IN_PHOTOS = [["photo_front","1. Vehicle Front Photo"],["photo_chassis_no","2. Vehicle Chassis No. Photo"],["photo_chassis_plate","3. Vehicle Chassis Plate Photo"],
   ["photo_form22","4. FORM 22 Photo"],["photo_cng_cert","5. Vehicle CNG Certificate Photo"],["photo_cng_kit","6. Vehicle CNG Kit Photo"],
-  ["photo_ecu","7. Vehicle ECU Photo"]];
-const IN_REQUIRED_PHOTOS = IN_PHOTOS.slice(0,4);
+  ["photo_ecu","7. Vehicle ECU Photo"],["photo_right_side_qr","8. Vehicle Right Side QR Photo"]];
+const IN_REQUIRED_PHOTOS = [...IN_PHOTOS.slice(0,4), IN_PHOTOS[7]];
 const inCount = x => IN_PHOTOS.filter(([k]) => x && x[k]).length;
 const inPhotoPaths = x => IN_PHOTOS.map(([k]) => x?.[k]).filter(Boolean);
 const inPdfPath = path => String(path || "").replace(/\.[^.\/]+$/, ".pdf");
@@ -17,9 +17,9 @@ const missingInPhotos = d => IN_REQUIRED_PHOTOS.filter(([k]) => !d?.files?.[k]).
 
 function inBlockHtml(p){
   return `<div id="${p}Block" class="gate-in-block"><div class="gate-in-title">Vehicle IN Details</div><div class="gate-in-grid">
-    ${IN_PHOTOS.map(([k,l],i) => `<div class="gate-field"><label>${l}${i < 4 ? ' <span>*</span>' : ""}</label><button type="button" class="gate-in-capture" data-photo-capture="${p}_${k}">📷 Click Photo</button><input type="file" accept="image/*" capture="environment" id="${p}_${k}" class="in-file" hidden><small id="${p}_${k}_n" class="in-note"></small></div>`).join("")}
-    ${[1,2,3,4].map(n => `<div class="gate-field"><label>8. TYRE SERIAL NO. ${n}</label><input id="${p}_tyre${n}" autocomplete="off" placeholder="Tyre ${n} serial no."></div>`).join("")}
-    <div class="gate-field"><label>9. EV BATTERY NO.</label><input id="${p}_ev" autocomplete="off" placeholder="Battery no."></div></div></div>`;
+    ${IN_PHOTOS.map(([k,l]) => `<div class="gate-field"><label>${l}${IN_REQUIRED_PHOTOS.some(([required]) => required === k) ? ' <span>*</span>' : ""}</label><button type="button" class="gate-in-capture" data-photo-capture="${p}_${k}">📷 Click Photo</button><input type="file" accept="image/*" capture="environment" id="${p}_${k}" class="in-file" hidden><small id="${p}_${k}_n" class="in-note"></small></div>`).join("")}
+    ${[1,2,3,4].map(n => `<div class="gate-field"><label>9. TYRE SERIAL NO. ${n}</label><input id="${p}_tyre${n}" autocomplete="off" placeholder="Tyre ${n} serial no."></div>`).join("")}
+    <div class="gate-field"><label>10. EV BATTERY NO.</label><input id="${p}_ev" autocomplete="off" placeholder="Battery no."></div></div></div>`;
 }
 // Read the fields of an IN block. `keep` = files already chosen earlier (bulk modal), so re-opening does not lose them.
 function readIn(p, keep = {}){

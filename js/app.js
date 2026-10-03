@@ -288,7 +288,7 @@ async function loadImportHistory(){
 
 function renderGate(page){
  const title={bhilarwadi:"Bhilarwadi In / Out",gate:"Vehicle In / Out","bulk-gate":"Bulk Vehicle In / Out","gate-pass":"Gate Pass",register:"In-Out Register"}[page];
- $("content").innerHTML=`<div class="panel"><div class="panel-head"><h3>${title}</h3>${page==="register"?`<button class="secondary-btn" onclick="loadGateRegister()">Refresh</button>`:""}</div>
+ $("content").innerHTML=`<div class="panel"><div class="panel-head"><h3>${title}</h3>${page==="register"?`<button class="secondary-btn" type="button" onclick="loadGateRegister()" aria-label="Refresh" title="Refresh">↻</button>`:""}</div>
  ${page==="register"?`<div id="gateRegister">${emptyState("No live gate movements.")}</div>`:`<form id="gateForm" class="form-grid">
  <div><label>VIN</label><input name="vin" required></div><div><label>MOVEMENT</label><select name="movement_type"><option>IN</option><option>OUT</option></select></div>
  <div><label>REASON</label><select name="movement_reason"><option>PURCHASE</option><option>DELIVERY</option><option>TRANSFER</option><option>TEST_DRIVE</option><option>OTHER</option></select></div>
@@ -351,7 +351,7 @@ function renderReport(page){
  "gate-report":["Gate Movement Report","gate_movement_report",["Date","Type","VIN","From","To","Gate"],r=>[date(r.movement_time),r.movement_type,r.vin,r.from_location||"-",r.to_location||"-",r.gate_name||"-"]],
  "dealer-report":["Dealer Code-wise Stock","dealer_code_stock_report",["Dealer Code","Vehicles","Stock Value"],r=>[r.dealer_code,r.vehicle_count,money(r.stock_value)]]
  };
- const m=map[page]; $("content").innerHTML=`<div class="panel"><div class="panel-head"><h3>${m?m[0]:"Report"}</h3><button class="secondary-btn" onclick="loadReport('${page}')">↻ Refresh</button></div><div id="reportTable">${emptyState("Loading live report...")}</div></div>`;
+ const m=map[page]; $("content").innerHTML=`<div class="panel"><div class="panel-head"><h3>${m?m[0]:"Report"}</h3><button class="secondary-btn" type="button" onclick="loadReport('${page}')" aria-label="Refresh" title="Refresh">↻</button></div><div id="reportTable">${emptyState("Loading live report...")}</div></div>`;
  loadReport(page);
 }
 async function loadReport(page){
@@ -399,7 +399,7 @@ async function renderAdmin(page){
      </form>
      <div id="createUserMessage" class="message"></div>
    </div>
-   <div class="panel"><div class="panel-head"><h3>Users</h3><button class="secondary-btn" id="refreshUsersBtn">↻ Refresh</button></div>
+   <div class="panel"><div class="panel-head"><h3>Users</h3><button class="secondary-btn" id="refreshUsersBtn" type="button" aria-label="Refresh" title="Refresh">↻</button></div>
      <div id="usersTable">${emptyState("Loading users...")}</div>
    </div></div>`;
 

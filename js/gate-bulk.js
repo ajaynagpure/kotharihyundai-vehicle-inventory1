@@ -132,7 +132,7 @@ async function saveBulk(){
     if(BULK.gate === "Bhilarwadi" && type === "IN"){
       for(const item of items){
         const missing = missingInPhotos(item.inx || {files:{}});
-        if(missing.length){ toast(`${item.vin}: upload Vehicle IN photos 1–4 before saving.`,"error"); return; }
+        if(missing.length){ toast(`${item.vin}: upload required Vehicle IN photos: ${missing.join(", ")}.`,"error"); return; }
       }
       try {
         for(let i = 0; i < items.length; i++) if(items[i].inx){
