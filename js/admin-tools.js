@@ -179,6 +179,7 @@ async function openUserEdit(u){
   const [roles, locs] = await Promise.all([state.supabase.from("roles").select("id,name").order("name"), getLocations()]);
   openModal(`<div class="modal-bg"><div class="modal" role="dialog" aria-modal="true"><div class="panel-head"><h3>Edit User — ${esc(u.username)}</h3><button class="icon-btn" type="button" id="modalClose">×</button></div>
     <form id="userEditForm" class="form-grid"><div><label>FULL NAME</label><input name="full_name" value="${esc(u.full_name || "")}"></div>
+    <div><label>EMAIL ADDRESS</label><input name="email" type="email" value="${esc(u.email || "")}" autocomplete="email"></div>
     <div><label>ROLE</label><select name="role_id">${(roles.data || []).map(r => `<option value="${esc(r.id)}" ${r.id === u.role_id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>
     <div><label>LOCATION</label><select name="location_id"><option value="">All Locations</option>${locs.filter(l => l.active !== false || l.id === u.location_id).map(l => `<option value="${esc(l.id)}" ${l.id === u.location_id ? "selected" : ""}>${esc(l.location_name)}</option>`).join("")}</select></div>
     <div><label>STATUS</label><select name="active"><option value="true" ${u.active === false ? "" : "selected"}>Active</option><option value="false" ${u.active === false ? "selected" : ""}>Inactive</option></select></div>
@@ -187,6 +188,13 @@ async function openUserEdit(u){
   $("userEditForm").addEventListener("submit", async e => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target).entries());
     if(state.user?.id === u.id && f.active === "false") return toast("You cannot deactivate yourself.","error");
+    const email = String(f.email || "").trim().toLowerCase(), oldEmail = String(u.email || "").trim().toLowerCase();
+    if(email && email !== oldEmail){
+      try {
+        const credential = await updateUserCredentials({user_id:u.id,email});
+        if(credential.error) return toast(credential.error,"error");
+      } catch(err){ return toast(err.message || "Unable to update user email.","error"); }
+    } else if(!email && oldEmail) return toast("Email address cannot be empty.","error");
     const patch = {full_name:nzv(f.full_name), role_id:f.role_id || null, location_id:f.location_id || null, active:f.active === "true"};
     const r = await state.supabase.from("user_profiles").update(patch).eq("id", u.id).select("id");
     if(r.error) return toast(r.error.message + dbHint(r.error), "error");
@@ -271,29 +279,10 @@ const DM_RESETS = [
 async function renderDataManage(){
   if(!state.isAdmin){ renderDenied(); return; }
   const all = await allVehicles(true); await getLocations();
-  $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Data Management</h3></div>
-    <p class="form-help">Select records and delete them in bulk. Order, Purchase and Sales reports all live in the same vehicle record, so deleting a row removes that vehicle from every report.</p>
-    <div class="tabs">${Object.entries(DM_TABS).map(([k, t]) => `<button type="button" class="tab-btn ${k === DM.tab ? "active" : ""}" data-dmtab="${k}">${t.label} (${all.filter(t.test).length.toLocaleString("en-IN")})</button>`).join("")}</div>
-    <div class="report-tools dm-tools"><input id="dmSearch" type="search" placeholder="Filter rows..." aria-label="Filter rows">
-      <button class="secondary-btn" type="button" id="dmAll">☑ Select all (filtered)</button><button class="secondary-btn" type="button" id="dmNone">☐ Clear</button>
-      <button class="secondary-btn" type="button" id="dmEdit">✎ Edit selected</button><button class="secondary-btn" type="button" id="dmExp">⤓ Export</button>
-      <button class="secondary-btn danger" type="button" id="dmDel">🗑 Delete selected</button></div>
-    <div id="dmInfo" class="form-help"></div><div id="dmList" class="table-wrap"></div></div>
-    <div class="panel danger-zone"><div class="panel-head"><h3>Data Reset</h3></div><p class="form-help">Permanent. You must type RESET to confirm.</p>
+  $("content").innerHTML = `<div class="panel danger-zone"><div class="panel-head"><h3>Data Reset</h3></div><p class="form-help">Permanent. You must type RESET to confirm.</p>
       <div class="reset-grid">${DM_RESETS.map(x => { const n = x.count ? x.count(all) : null;
         return `<div class="reset-item"><b>${x.title}</b><span>${x.desc}</span><button class="secondary-btn danger" type="button" data-reset="${x.k}">${n === null ? "Reset…" : `Reset (${n.toLocaleString("en-IN")})`}</button></div>`; }).join("")}</div></div>`;
-  DM.q = ""; DM.sel = new Set();
-  document.querySelectorAll("[data-dmtab]").forEach(b => b.addEventListener("click", () => { DM.tab = b.dataset.dmtab; renderDataManage(); }));
-  $("dmSearch").addEventListener("input", e => { DM.q = e.target.value; drawDM(all); });
-  $("dmAll").onclick = () => { dmFiltered(all).forEach(v => DM.sel.add(String(v.id))); drawDM(all); };
-  $("dmNone").onclick = () => { DM.sel.clear(); drawDM(all); };
-  $("dmDel").onclick = () => { const vs = dmSelected(all); if(!vs.length) return toast("Select rows first.","error"); deleteVehicles(vs, renderDataManage); };
-  $("dmEdit").onclick = () => { const vs = dmSelected(all); if(vs.length !== 1) return toast("Select exactly one row to edit.","error"); openVehicleEdit(vs[0], renderDataManage); };
-  $("dmExp").onclick = () => { const t = DM_TABS[DM.tab], l = dmFiltered(all); if(!l.length) return toast("Nothing to export.","error");
-    const cols = hasPerm("value.view") ? t.cols : t.cols.filter(c => c.t !== "money");
-    exportSheet("data-" + DM.tab.toLowerCase(), cols.map(c => c.h), l.map(r => cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
   document.querySelectorAll("[data-reset]").forEach(b => b.addEventListener("click", () => openResetConfirm(DM_RESETS.find(x => x.k === b.dataset.reset), all)));
-  drawDM(all);
 }
 const dmFiltered = all => { const t = DM_TABS[DM.tab], q = DM.q.trim().toLowerCase(), base = all.filter(t.test);
   return q ? base.filter(v => t.cols.some(c => String(fmtCell(c.t, v[c.k]) ?? "").toLowerCase().includes(q))) : base; };

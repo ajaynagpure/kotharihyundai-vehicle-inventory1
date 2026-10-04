@@ -79,8 +79,8 @@ async function docSearch(value){
     box.querySelectorAll("[data-doc-img]").forEach(img => { const u = urls[img.dataset.docImg]; if(u){ img.src = u; img.closest("a").href = u; } else img.alt = "preview unavailable"; });
     box.querySelectorAll("[data-dl]").forEach(b => b.addEventListener("click", () => downloadPath(b.dataset.dl, b.dataset.name)));
     box.querySelectorAll("[data-pdf]").forEach(b => b.addEventListener("click", () => downloadPath(b.dataset.pdf, b.dataset.name)));
-    box.querySelectorAll("[data-dl-all]").forEach(b => b.addEventListener("click", async () => {
-      const paths = JSON.parse(b.dataset.dlAll); b.disabled = true;
+    box.querySelectorAll("[data-pdf-all]").forEach(b => b.addEventListener("click", async () => {
+      const paths = JSON.parse(b.dataset.pdfAll); b.disabled = true;
       for(const [p, n] of paths){ await downloadPath(p, n); await new Promise(r => setTimeout(r, 400)); }
       b.disabled = false;
     }));
@@ -89,14 +89,14 @@ async function docSearch(value){
 function docCard(vin, list){
   return list.map(x => {
     const photos = IN_PHOTOS.filter(([k]) => x[k]);
+    const pdfs = photos.filter(([k,l]) => inPhotoPdfAvailable(x[k], l)).map(([k,l]) => [inPdfPath(x[k]), `${inPhotoBaseName(l)}.pdf`]);
     const tyres = [1,2,3,4].map(n => x["tyre_serial_" + n]).filter(Boolean);
-    const dlAll = photos.map(([k, l]) => [x[k], `${inPhotoBaseName(l)}.jpg`]);
     const detail = (l, v) => `<div class="doc-kv"><span>${esc(l)}</span><b>${esc(v || "-")}</b></div>`;
     return `<div class="doc-card"><div class="doc-head"><div><b class="mono">${esc(vin)}</b><span class="doc-sub">IN on ${esc(fmtD(x.receipt_dt || x.created_at))} • ${esc(gateLocOf(x) || "Bhilarwadi")}</span></div>
-      ${photos.length ? `<button class="secondary-btn" type="button" data-dl-all='${esc(JSON.stringify(dlAll))}'>⬇ Download all photos (${photos.length})</button>` : ""}</div>
+      ${pdfs.length ? `<button class="secondary-btn" type="button" data-pdf-all='${esc(JSON.stringify(pdfs))}'>⬇ Download All PDFs (${pdfs.length})</button>` : ""}</div>
       <div class="doc-grid">${detail("Variant", x.variant)}${detail("Color", x.color)}${detail("Engine No.", x.engine_no)}${detail("Tyre serial nos.", tyres.join(", "))}${detail("EV battery no.", x.ev_battery_no)}${detail("Remarks", x.remarks)}</div>
       ${photos.length ? `<div class="doc-photos">${photos.map(([k, l]) => `<figure><a target="_blank" rel="noopener"><img data-doc-img="${esc(x[k])}" alt="${esc(l)}" class="doc-img"></a>
-        <figcaption>${esc(inPhotoBaseName(l))}</figcaption><button class="table-icon-btn" type="button" data-dl="${esc(x[k])}" data-name="${esc(inPhotoBaseName(l) + ".jpg")}">⬇ Download photo</button>${inPhotoPdfAvailable(x[k], l) ? `<button class="table-icon-btn" type="button" data-pdf="${esc(inPdfPath(x[k]))}" data-name="${esc(inPhotoBaseName(l) + ".pdf")}">⬇ Download PDF</button>` : ""}</figure>`).join("")}</div>` : `<p class="form-help">No photos were uploaded for this entry.</p>`}
+        <figcaption>${esc(inPhotoBaseName(l))}</figcaption>${inPhotoPdfAvailable(x[k], l) ? `<button class="table-icon-btn" type="button" data-pdf="${esc(inPdfPath(x[k]))}" data-name="${esc(inPhotoBaseName(l) + ".pdf")}">⬇ Download PDF</button>` : ""}</figure>`).join("")}</div>` : `<p class="form-help">No photos were uploaded for this entry.</p>`}
       ${x.gate_pass_file ? `<div class="doc-pass"><b>Gate pass</b> <button class="table-icon-btn" type="button" data-dl="${esc(x.gate_pass_file)}" data-name="${esc("GatePass_" + vin + "_" + nameOfPath(x.gate_pass_file))}">⬇ Download</button></div>` : ""}</div>`;
   }).join("");
 }
@@ -124,7 +124,7 @@ async function loadGatePasses(){
     const r = await query;
     if(r.error) throw r.error;
     const rows = r.data || [];
-    const cells = rows.map(x => [raw(`<a target="_blank" rel="noopener"><img class="gp-thumb" data-gp-img="${esc(x.gate_pass_file)}" alt="Gate pass"></a>`), fmtD(x.receipt_dt || x.created_at), x.gate_name, x.movement_type, gateLocOf(x), raw(`<b class="mono">${esc(x.vin)}</b>`), x.variant, x.color,
+    const cells = rows.map(x => [raw(`<a target="_blank" rel="noopener"><img class="gp-thumb" data-gp-img="${esc(x.gate_pass_file)}" alt="Gate pass"></a>`), fmtD(x.receipt_dt || x.created_at), x.gate_name, movementTypeBadge(x.movement_type), gateLocOf(x), raw(`<b class="mono">${esc(x.vin)}</b>`), x.variant, x.color,
       raw(`<button class="table-icon-btn" type="button" data-gp-dl="${esc(x.gate_pass_file)}" data-gp-name="${esc("GatePass_" + x.vin + "_" + x.movement_type + "_" + (x.receipt_dt || "") + "." + (x.gate_pass_file.split(".").pop() || "jpg"))}">⬇ Download</button>`)]);
     mountPaged(box, {size:25, empty:"No uploaded gate passes yet.", headers:["Gate Pass","Date","Gate","Movement","Location","VIN No.","Variant","Color",""], rows:cells,
       onDraw:(el, slice, off) => {

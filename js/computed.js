@@ -63,7 +63,10 @@ function groupStock(vehicles, keyOf){
     else { x.stock_count++; x.stock_value += vValue(v); }
     g.set(k, x);
   });
-  return [...g.values()].map(x => ({...x, vehicle_count: x.stock_count + x.in_transit_count + x.pending_count + x.bill_count, total_value: x.stock_value + x.in_transit_value + x.bill_value}));
+  return [...g.values()].map(x => ({...x,
+    vehicle_count:x.stock_count + x.in_transit_count + x.pending_count + x.bill_count,
+    total_count:x.stock_count + x.in_transit_count + x.bill_count,
+    total_value:x.stock_value + x.in_transit_value + x.bill_value}));
 }
 // Ageing limits come from System Settings (default 30 / 60 / 90 days).
 function ageLimits(){ const s = (typeof state !== "undefined" && state.settings?.sys) || {}, n = (k, d) => { const x = parseInt(s[k], 10); return x > 0 ? x : d; };
@@ -74,18 +77,54 @@ function daysSince(iso){
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); if(!m) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(+m[1], +m[2]-1, +m[3]).getTime()) / 86400000));
 }
-async function gateRowsFallback(){
+function gateRowsWithVehicles(rows, vehicles){
+  const byId = new Map(), byVin = new Map();
+  vehicles.forEach(v => {
+    if(v.id != null) byId.set(String(v.id), v);
+    [v.vin,v.chassis_no,v.vehicle_no].filter(Boolean).forEach(id => byVin.set(String(id).trim().toUpperCase(), v));
+  });
+  return rows.map(x => {
+    const vehicle = byId.get(String(x.vehicle_id)) || byVin.get(String(x.vin || x.chassis_no || x.vehicle_no || "").trim().toUpperCase());
+    const model = x.model && x.model !== "-" ? x.model : vehicle?.model || vehicle?.model_name || "-";
+    return {...x, model, stock_value:x.stock_value ?? vehicle?.stock_value ?? 0, vehicle_location_id:vehicle?.location_id || null,
+      source_location:x.from_location || "", destination_location:x.to_location || ""};
+  });
+}
+async function gateRowsFallback(vehicles = null){
   const sb = state.supabase;
   const rows = await fetchAll(() => sb.from("gate_movements").select("*").order("created_at",{ascending:false}), {max:50000});
-  return rows.map(x => {
+  const normalized = rows.map(x => {
     const inbound = String(x.movement_type || "").toUpperCase() === "IN", loc = x.location_name || "";
     return {...x, movement_time:x.movement_time || x.created_at || x.receipt_dt,
       from_location:x.from_location || (inbound ? "" : loc), to_location:x.to_location || (inbound ? loc : "")};
   });
+  return gateRowsWithVehicles(normalized, vehicles ?? await allVehicles());
+}
+function awaitingArrivalRows(rows){
+  const latest = new Map();
+  rows.forEach(row => {
+    const vin = String(row.vin || row.chassis_no || row.vehicle_no || "").trim().toUpperCase().replace(/\s+/g, "");
+    const key = vin || (row.vehicle_id ? `id:${row.vehicle_id}` : "");
+    if(!key) return;
+    const previous = latest.get(key);
+    const time = Date.parse(row.created_at || row.movement_time || row.receipt_dt || "") || 0;
+    const previousTime = Date.parse(previous?.created_at || previous?.movement_time || previous?.receipt_dt || "") || 0;
+    if(!previous || time >= previousTime) latest.set(key, row);
+  });
+  return [...latest.values()].filter(row => String(row.movement_type || "").toUpperCase() === "OUT").map(row => ({
+    ...row,
+    status:"In Transit",
+    in_location:row.destination_location || row.to_location || row.location_name || "-",
+    out_location:row.source_location || (row.vehicle_location_id ? locName(row.vehicle_location_id) : "-")
+  }));
 }
 async function computedRows(source){
   if(source === "gate_movement_report") return gateRowsFallback();
-  if(source === "awaiting_arrival_report") return [];
+  if(source === "awaiting_arrival_report"){
+    const rows = await gateRowsFallback();
+    await getLocations();
+    return awaitingArrivalRows(rows);
+  }
   const all = await allVehicles();
   await getLocations();
   switch(source){

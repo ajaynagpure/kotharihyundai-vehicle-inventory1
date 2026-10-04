@@ -119,7 +119,7 @@ function loadZxing(){
 }
 /** Opens the camera, calls onResult(vin) on the first code found. Works with the browser BarcodeDetector,
  *  falls back to ZXing, and always offers "take a photo of the barcode". */
-async function openScanner(onResult){
+async function openScanner(onResult, {captureImage = false} = {}){
   openModal(`<div class="modal-bg" id="scanBg"><div class="modal scan-modal" role="dialog" aria-modal="true" aria-label="Scan VIN">
     <div class="panel-head"><h3>Scan VIN / Chassis barcode</h3><button class="icon-btn" type="button" id="scanClose" aria-label="Close">×</button></div>
     <video id="scanVideo" playsinline muted autoplay></video><p id="scanMsg" class="form-help">Point the camera at the VIN barcode or QR code.</p>
@@ -127,11 +127,27 @@ async function openScanner(onResult){
     <div class="form-actions"><label class="secondary-btn scan-photo">📷 Take / choose photo<input id="scanFile" type="file" accept="image/*" capture="environment" hidden></label>
     <button type="button" class="secondary-btn" id="scanCancel">Cancel</button></div></div></div>`);
   const msg = t => { const m = $("scanMsg"); if(m) m.textContent = t; };
-  let stream = null, timer = null, zxControls = null, finished = false;
+  let stream = null, timer = null, zxControls = null, finished = false, finishing = false, scannedImage = null;
   const stop = () => { finished = true; clearInterval(timer); try { zxControls?.stop(); } catch { /* ignore */ } stream?.getTracks().forEach(t => t.stop()); closeModal(); document.removeEventListener("keydown", onKey); };
   const onKey = e => { if(e.key === "Escape") stop(); };
   document.addEventListener("keydown", onKey);
-  const acc = {prefix:null, serial:null, tried:null}, finish = vin => { if(finished) return; stop(); onResult(vin); };
+  const captureScannedImage = async () => {
+    if(!captureImage) return null;
+    if(scannedImage) return scannedImage;
+    const video = $("scanVideo");
+    if(!video?.videoWidth || !video?.videoHeight) return null;
+    const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d"); if(!context) return null;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    return blob ? new File([blob], "Vehicle_Right_Side_QR.jpg", {type:"image/jpeg", lastModified:Date.now()}) : null;
+  };
+  const acc = {prefix:null, serial:null, tried:null}, finish = async vin => {
+    if(finished || finishing) return;
+    finishing = true;
+    const image = await captureScannedImage();
+    stop(); onResult(vin, image);
+  };
   const showPrefixBox = () => { const b = $("scanPrefixBox"); if(b) b.style.display = "block"; };
   const resolveAcc = async () => {
     if(finished || !acc.serial) return;
@@ -160,7 +176,7 @@ async function openScanner(onResult){
   if(window.BarcodeDetector){ try { detector = new BarcodeDetector({formats:["code_128","code_39","code_93","qr_code","data_matrix","pdf417","ean_13","itf","codabar"]}); } catch { try { detector = new BarcodeDetector(); } catch { detector = null; } } }
 
   $("scanFile").addEventListener("change", async e => {              // photo of the barcode
-    const f = e.target.files[0]; if(!f) return; msg("Reading photo…");
+    const f = e.target.files[0]; if(!f) return; scannedImage = f; msg("Reading photo…");
     try {
       if(detector){ const codes = await detector.detect(await createImageBitmap(f)); if(codes.length){ codes.forEach(c => found(c.rawValue)); return; } }
       const Z = await loadZxing(), url = URL.createObjectURL(f);
@@ -197,6 +213,7 @@ function openVehicleDetails(v){
 async function globalVinSearch(e){
   e?.preventDefault();
   const input = $("globalVin"), q = cleanQuery(input.value).replace(/\s+/g, "").toUpperCase();
+  const suggestions = $("globalVinSuggestions"); if(suggestions) suggestions.hidden = true;
   if(q.length < 3) return toast("Enter at least 3 characters of the VIN.", "error");
   if(!state.supabase) return toast("Connect Supabase first.", "error");
   const r = await state.supabase.from("vehicles").select("*").ilike("vin", `%${q}%`).limit(30);
@@ -211,4 +228,30 @@ async function globalVinSearch(e){
   $("modalClose").onclick = closeModal; $("vdBg").addEventListener("mousedown", ev => { if(ev.target.id === "vdBg") closeModal(); });
   document.querySelectorAll("#vdBg [data-i]").forEach(b => b.addEventListener("click", () => openVehicleDetails(list[+b.dataset.i])));
 }
-document.addEventListener("DOMContentLoaded", () => { $("globalSearch")?.addEventListener("submit", globalVinSearch); });
+let globalSuggestionTimer = null, globalSuggestionRequest = 0;
+async function loadGlobalVinSuggestions(){
+  const input = $("globalVin"), box = $("globalVinSuggestions");
+  if(!input || !box) return;
+  const q = cleanQuery(input.value).replace(/\s+/g, "").toUpperCase(), request = ++globalSuggestionRequest;
+  if(q.length < 3 || !state.supabase){ box.hidden = true; box.innerHTML = ""; return; }
+  const result = await state.supabase.from("vehicles").select("id,vin,model,variant,engine_no,color,location_id,status").ilike("vin", `%${q}%`).limit(8);
+  if(request !== globalSuggestionRequest || q !== cleanQuery(input.value).replace(/\s+/g, "").toUpperCase()) return;
+  if(result.error){ box.hidden = true; return; }
+  const rows = result.data || [];
+  if(rows.length) await getLocations();
+  if(request !== globalSuggestionRequest || q !== cleanQuery(input.value).replace(/\s+/g, "").toUpperCase()) return;
+  box.innerHTML = rows.length ? rows.map((v,i) => `<button type="button" class="global-vin-suggestion" data-global-vin="${i}">
+    <span class="global-vin-main"><b class="mono">${esc(v.vin || "-")}</b><small>Model: ${esc(v.model || "-")} · Variant: ${esc(v.variant || "-")}</small><small>Engine No.: ${esc(v.engine_no || "-")} · Color: ${esc(v.color || "-")}</small><small>Location: ${esc(vLocName(v))}</small></span>
+    ${statusBadge(v.status).html}</button>`).join("") : `<div class="global-vin-suggestion-empty">No matching vehicles.</div>`;
+  box.hidden = false;
+  box.querySelectorAll("[data-global-vin]").forEach(button => button.addEventListener("mousedown", async event => {
+    event.preventDefault(); const vehicle = rows[Number(button.dataset.globalVin)]; if(!vehicle) return;
+    box.hidden = true; input.value = ""; await getLocations(); openVehicleDetails(vehicle);
+  }));
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const form = $("globalSearch"), input = $("globalVin"), box = $("globalVinSuggestions");
+  form?.addEventListener("submit", globalVinSearch);
+  input?.addEventListener("input", () => { clearTimeout(globalSuggestionTimer); globalSuggestionTimer = setTimeout(loadGlobalVinSuggestions, 250); });
+  document.addEventListener("click", event => { if(box && !event.target.closest("#globalSearch")) box.hidden = true; });
+});

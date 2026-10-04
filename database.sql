@@ -1335,3 +1335,83 @@ where au.id = up.id
   and au.email is not null
   and au.email not like '%@login.kotharihyundai.local'
   and (up.email is null or up.email = '');
+
+-- ============================================================
+-- SINGLE LOGIN SESSION + 30 MINUTE IDLE TIMEOUT
+-- Apply this section in Supabase SQL Editor before enabling the website update.
+-- ============================================================
+create table if not exists public.user_login_sessions (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  session_id uuid not null,
+  last_activity_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+alter table public.user_login_sessions enable row level security;
+revoke all on table public.user_login_sessions from anon, authenticated;
+
+create or replace function public.claim_user_login_session(p_session_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  v_claimed boolean := false;
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  if p_session_id is null then raise exception 'Session id is required'; end if;
+
+  insert into public.user_login_sessions(user_id, session_id, last_activity_at, expires_at)
+  values(auth.uid(), p_session_id, now(), now() + interval '30 minutes')
+  on conflict(user_id) do update set
+    session_id = excluded.session_id,
+    last_activity_at = excluded.last_activity_at,
+    expires_at = excluded.expires_at
+  where public.user_login_sessions.expires_at <= now()
+     or public.user_login_sessions.session_id = excluded.session_id
+  returning true into v_claimed;
+
+  return coalesce(v_claimed, false);
+end;
+$$;
+
+create or replace function public.touch_user_login_session(p_session_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  update public.user_login_sessions
+     set last_activity_at = now(), expires_at = now() + interval '30 minutes'
+   where user_id = auth.uid()
+     and session_id = p_session_id
+     and expires_at > now();
+  return found;
+end;
+$$;
+
+create or replace function public.release_user_login_session(p_session_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  delete from public.user_login_sessions
+   where user_id = auth.uid() and session_id = p_session_id;
+  return found;
+end;
+$$;
+
+revoke all on function public.claim_user_login_session(uuid) from public, anon;
+revoke all on function public.touch_user_login_session(uuid) from public, anon;
+revoke all on function public.release_user_login_session(uuid) from public, anon;
+grant execute on function public.claim_user_login_session(uuid) to authenticated;
+grant execute on function public.touch_user_login_session(uuid) to authenticated;
+grant execute on function public.release_user_login_session(uuid) to authenticated;
+
+NOTIFY pgrst, 'reload schema';

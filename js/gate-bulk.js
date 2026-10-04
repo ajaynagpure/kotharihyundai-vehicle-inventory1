@@ -172,7 +172,7 @@ function showGateTable(target, rows, reload){
   const cells = rows.map((x,i) => {
     const extra = [...(bh ? [x.movement_type === "IN" ? raw(`<button class="table-icon-btn" type="button" title="Photos / tyre serials / EV battery" data-in-view="${i}">📷 ${inCount(x)}/7</button>`) : ""] : []),
       x.gate_pass_file ? raw(`<button class="table-icon-btn" type="button" title="Download gate pass" data-gate-dl="${i}">⬇</button>`) : ""];
-    const r = [...gatePlainRow(x, i, GATE_GATE,false), ...extra]; if(!ed) return r;
+    const r = [...gatePlainRow(x, i, GATE_GATE,false,true), ...extra]; if(!ed) return r;
     return [raw(`<input type="checkbox" class="gt-chk" data-i="${i}">`), ...r,
       raw(`<button class="table-icon-btn" type="button" title="Edit" data-gate-edit="${i}">✎</button><button class="table-icon-btn danger" type="button" title="Delete" data-gate-del="${i}">🗑</button>`)];
   });

@@ -5,9 +5,9 @@ async function renderAdmin(page){
   const head = t => `<div class="panel-head"><h3>${esc(t)}</h3></div>`;
   if(page === "users"){
     c.innerHTML = `<div class="panel">${head("Create User")}<form id="createUserForm" class="form-grid">
-      <div><label>USERNAME</label><input name="username" required placeholder="accounts01"></div>
+      <div><label>USERNAME</label><input name="username" required></div>
       <div><label>FULL NAME</label><input name="full_name" required></div>
-      <div><label>EMAIL ADDRESS</label><input name="email" type="email" required placeholder="name@kotharihyundai.co.in" autocomplete="email"></div>
+      <div><label>EMAIL ADDRESS</label><input name="email" type="email" required autocomplete="email"></div>
       <div><label>PASSWORD</label><div class="password-field"><input id="newUserPassword" name="password" required type="password" minlength="6" maxlength="12" placeholder="6 to 12 characters"><button type="button" class="password-eye" data-password-toggle="newUserPassword" aria-label="Show password" title="Show password">👁</button></div></div>
       <div><label>ROLE</label><select name="role_id" id="newUserRole" required></select></div>
       <div><label>LOCATION</label><select name="location_id" id="newUserLocation" required></select></div>
@@ -81,7 +81,7 @@ async function loadUsers(){
   const pwdCell = x => raw(`<div class="password-field table-password"><input id="pwd_${esc(x.id)}" type="password" value="${esc(x.password_display || "")}" placeholder="Not available" readonly><button type="button" class="password-eye" data-password-toggle="pwd_${esc(x.id)}" aria-label="Show password" title="Show password">👁</button></div>`);
   $("usersTable").innerHTML = r.error ? emptyState(r.error.message) :
     table(["Username","Name","Email","Password","Role","Location","Status","Created",...(ad ? ["Action"] : [])], list.map((x,i) => [x.username,x.full_name,x.email||"-",pwdCell(x),roleSel(x),x.location_id?locName(x.location_id):"All Locations",statSel(x),fmtDT(x.created_at),
-      ...(ad ? [raw(`<button class="table-icon-btn" type="button" data-user-edit="${i}" title="Edit">✎</button><button class="table-icon-btn danger" type="button" data-user-del="${i}" title="Delete user">🗑</button>`)] : [])]));
+      ...(ad ? [raw(`<button class="table-icon-btn" type="button" data-user-edit="${i}" title="Edit">✎</button><button class="table-icon-btn" type="button" data-user-reset="${i}" title="Reset password">↻</button><button class="table-icon-btn danger" type="button" data-user-del="${i}" title="Delete user">🗑</button>`)] : [])]));
   const box = $("usersTable");
   box.querySelectorAll("[data-password-toggle]").forEach(b => b.addEventListener("click", () => {
     const input = document.getElementById(b.dataset.passwordToggle);
@@ -91,6 +91,7 @@ async function loadUsers(){
     b.title = input.type === "password" ? "Show password" : "Hide password";
   }));
   box.querySelectorAll("[data-user-edit]").forEach(b => b.addEventListener("click", () => openUserEdit(list[+b.dataset.userEdit])));
+  box.querySelectorAll("[data-user-reset]").forEach(b => b.addEventListener("click", () => openUserPasswordReset(list[+b.dataset.userReset])));
   box.querySelectorAll("[data-user-del]").forEach(b => b.addEventListener("click", () => deleteUser(list[+b.dataset.userDel])));
   // Assign role / user status right in the list (saves instantly)
   const quick = (sel, mk) => box.querySelectorAll(sel).forEach(s => s.addEventListener("change", async () => {
@@ -102,6 +103,38 @@ async function loadUsers(){
   }));
   quick("[data-u-role]", v => ({role_id:v}));
   quick("[data-u-active]", v => ({active:v === "true"}));
+}
+async function updateUserCredentials(payload){
+  const {data:{session}} = await state.supabase.auth.getSession();
+  if(!session) return {error:"Session expired. Please login again."};
+  const response = await fetch(`${SUPABASE_CONFIG.url}/functions/v1/update-user-credentials`, {method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${session.access_token}`,"apikey":SUPABASE_CONFIG.anonKey},
+    body:JSON.stringify(payload)});
+  const result = await response.json().catch(() => ({}));
+  return response.ok ? {data:result} : {error:result.error || "Unable to update user credentials."};
+}
+function openUserPasswordReset(user){
+  if(!user || !state.isAdmin) return;
+  openModal(`<div class="modal-bg"><div class="modal"><div class="panel-head"><h3>Reset Password — ${esc(user.username)}</h3><button class="icon-btn" type="button" id="modalClose" aria-label="Close">×</button></div>
+    <form id="resetUserPasswordForm" class="form-grid"><div class="full"><label>NEW PASSWORD</label><div class="password-field"><input id="resetUserPassword" name="password" type="password" minlength="6" maxlength="12" required autocomplete="new-password"><button type="button" class="password-eye" data-password-toggle="resetUserPassword" aria-label="Show password" title="Show password">👁</button></div></div>
+    <div class="full"><label>CONFIRM NEW PASSWORD</label><input name="confirm_password" type="password" minlength="6" maxlength="12" required autocomplete="new-password"></div>
+    <div id="resetUserPasswordMessage" class="message full"></div><div class="full form-actions"><button class="secondary-btn" type="button" id="resetUserPasswordCancel">Cancel</button><button class="primary-btn" type="submit">Reset Password</button></div></form></div></div>`);
+  const close = () => closeModal();
+  $("modalClose").onclick = close; $("resetUserPasswordCancel").onclick = close;
+  $("resetUserPasswordForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = Object.fromEntries(new FormData(event.target).entries()), message = $("resetUserPasswordMessage"), button = event.target.querySelector("button[type=submit]");
+    if(form.password.length < 6 || form.password.length > 12){ message.textContent = "Password must be 6 to 12 characters."; message.className = "message error full"; return; }
+    if(form.password !== form.confirm_password){ message.textContent = "Passwords do not match."; message.className = "message error full"; return; }
+    button.disabled = true; button.textContent = "Resetting…";
+    try {
+      const result = await updateUserCredentials({user_id:user.id,password:form.password});
+      if(result.error){ message.textContent = result.error; message.className = "message error full"; return; }
+      logAudit("RESET_USER_PASSWORD","users","user",user.id,{username:user.username});
+      toast("Password reset successfully. Use the eye button to reveal the new password.","success"); close(); loadUsers();
+    } catch(err){ message.textContent = err.message || "Unable to reset password. Is update-user-credentials deployed?"; message.className = "message error full"; }
+    finally { button.disabled = false; button.textContent = "Reset Password"; }
+  });
 }
 async function deleteUser(u){
   if(!u) return;

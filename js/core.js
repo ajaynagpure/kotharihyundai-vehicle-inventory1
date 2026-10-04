@@ -7,16 +7,14 @@ const MENU = [
   {section:"MAIN", items:[["dashboard","Dashboard","▦"]], collapsible:false},
   {section:"VEHICLE MANAGEMENT", items:[
     ["vehicles","Vehicle Stock","▤"],["search","Search by Chassis / VIN","⌕"],
-    ["status","Current Status","◉"],["timeline","View Timeline","◷"],
-    ["documents","Bhilarwadi Documents","▣"]
+    ["timeline","View Timeline","◷"]
   ]},
   {section:"DATA IMPORT", items:[
-    ["order-import","Order Report Import","⇧"],["purchase-import","Purchase Report Import","⇧"],
-    ["sales-import","Sales Report Import","⇧"],["import-data","Imported Data","☰"],["import-history","Import History","≡"]
+    ["data-import","Data Import","⇧"],["import-data","Imported Data","☰"],["import-history","Import History","≡"]
   ]},
   {section:"GATE MANAGEMENT", items:[
     ["bhilarwadi","Bhilarwadi In","⇄"],["gate","Branch Vehicle In / Out","⇄"],
-    ["register","In-Out Register","☷"]
+    ["register","In-Out Register","☷"],["documents","Bhilarwadi Documents","▣"]
   ]},
   {section:"DELIVERY", items:[
     ["delivery-entry","Delivery Entry","✓"],["delivered","Delivered Vehicles","✓"],["delivery-history","Delivery History","◷"]
@@ -48,7 +46,8 @@ const ALL_PERMS = ["dashboard.view","vehicle.view","vehicle.update","import.orde
 const PAGE_PERM = {
   dashboard:"dashboard.view",
   vehicles:"vehicle.view", search:"vehicle.view", status:"vehicle.view", timeline:"vehicle.view", documents:"vehicle.view",
-  "order-import":"import.order", "purchase-import":"import.purchase", "sales-import":"import.sales",
+  "data-import":["import.order","import.purchase","import.sales"],
+  "order-import":"import.order", "purchase-import":"import.purchase", "manual-purchase":"import.purchase", "sales-import":"import.sales", "delivery-import":"delivery.manage",
   "import-history":["import.order","import.purchase","import.sales"], "import-data":["import.order","import.purchase","import.sales"],
   bhilarwadi:"gate.inout", gate:"gate.inout", register:"gate.inout", "gate-pass":"gate.pass",
   "delivery-entry":"delivery.manage", delivered:"delivery.manage", "delivery-history":"delivery.manage",
@@ -191,15 +190,17 @@ function fmtCell(type, v){
 }
 function statusClass(s){
   const k = String(s || "").toLowerCase();
+  if(k.includes("cancel")) return "cancelled";
   if(k.includes("pending")) return "warn";
   if(k.includes("transit")) return "info";
   if(k.includes("tally") || /not[\s\-_\/]*deliver|undeliver/.test(k) || k.includes("bill") || k.includes("sales") || k.includes("sold")) return "purple";   // Tally Done
   if(k.includes("deliver")) return "ok";
   if(k.includes("stock") || k.includes("available")) return "stock";
-  return "";
+  return "neutral";
 }
 function statusLabel(s){ return String(s || "-").toLowerCase() === "in stock" ? "Free Stock" : String(s || "-"); }
-function statusBadge(s){ return raw(`<span class="badge ${statusClass(s)}">${esc(statusLabel(s))}</span>`); }
+function statusBadge(s){ return !String(s || "").trim() || String(s).trim() === "-" ? raw("-") : raw(`<span class="badge ${statusClass(s)}">${esc(statusLabel(s))}</span>`); }
+function movementTypeBadge(s){ const type = String(s || "").trim().toUpperCase(); return ["IN","OUT"].includes(type) ? raw(`<span class="badge dashboard-movement-${type.toLowerCase()}">${type}</span>`) : type || "-"; }
 // PostgREST .or()/.ilike values: remove characters that break the filter grammar
 function cleanQuery(q){ return String(q || "").replace(/[,()%*\\:"']/g," ").replace(/\s+/g," ").trim(); }
 
@@ -307,6 +308,75 @@ function setConnection(ok){
   $("connectionText").textContent = ok ? "Supabase connected" : "Supabase not configured";
 }
 function setLoginMessage(text, type){ const el = $("loginMessage"); el.textContent = text; el.className = "message" + (type ? " " + type : ""); }
+const LOGIN_IDLE_LIMIT_MS = 30 * 60 * 1000, LOGIN_HEARTBEAT_MS = 60 * 1000;
+let loginLeaseTimer = null, loginLeaseUserId = "", loginLeaseId = "", loginActivityKey = "", loginLastTouchAt = 0, loginLastActivityWriteAt = 0, loginLeaseBusy = false;
+function loginSessionId(userId){
+  const key = `kh_login_session_${userId}`;
+  let id = localStorage.getItem(key);
+  if(!id){
+    id = window.crypto?.randomUUID?.() || "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, character => {
+      const value = Math.floor(Math.random() * 16);
+      return (character === "x" ? value : (value & 3) | 8).toString(16);
+    });
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+function noteLoginActivity(){
+  if(!loginLeaseUserId) return;
+  const now = Date.now();
+  if(now - loginLastActivityWriteAt < 10000) return;
+  loginLastActivityWriteAt = now;
+  try { localStorage.setItem(loginActivityKey, String(now)); } catch {}
+}
+function stopLoginLease(){
+  clearInterval(loginLeaseTimer); loginLeaseTimer = null;
+  loginLeaseUserId = ""; loginLeaseId = ""; loginActivityKey = ""; loginLeaseBusy = false;
+}
+function startLoginLease(userId, sessionId){
+  stopLoginLease(); loginLeaseUserId = userId; loginLeaseId = sessionId;
+  loginActivityKey = `kh_login_activity_${userId}`;
+  loginLastActivityWriteAt = Date.now(); loginLastTouchAt = Date.now();
+  try { localStorage.setItem(loginActivityKey, String(loginLastActivityWriteAt)); } catch {}
+  loginLeaseTimer = setInterval(async () => {
+    if(loginLeaseBusy || !loginLeaseUserId || state.user?.id !== loginLeaseUserId) return;
+    const now = Date.now(), lastActivity = Number(localStorage.getItem(loginActivityKey) || 0);
+    if(now - lastActivity >= LOGIN_IDLE_LIMIT_MS){
+      await endLoginSession("You were signed out after 30 minutes of inactivity.");
+      return;
+    }
+    if(now - loginLastTouchAt < LOGIN_HEARTBEAT_MS) return;
+    loginLeaseBusy = true;
+    try {
+      const result = await state.supabase.rpc("touch_user_login_session", {p_session_id:loginLeaseId});
+      if(result.error || result.data !== true){
+        await endLoginSession("This login session is no longer active. Please log in again.");
+        return;
+      }
+      loginLastTouchAt = Date.now();
+    } catch {
+      await endLoginSession("Could not verify this login session. Please log in again.");
+    } finally { loginLeaseBusy = false; }
+  }, 15000);
+}
+async function releaseLoginLease(){
+  const userId = loginLeaseUserId, sessionId = loginLeaseId;
+  stopLoginLease();
+  if(userId && sessionId && state.supabase){
+    try { await state.supabase.rpc("release_user_login_session", {p_session_id:sessionId}); } catch {}
+  }
+}
+async function endLoginSession(message){
+  await releaseLoginLease();
+  try { await state.supabase?.auth.signOut({scope:"local"}); } catch {}
+  showLogin(); setLoginMessage(message, "error");
+}
+async function claimLoginLease(user, client = state.supabase){
+  const sessionId = loginSessionId(user.id);
+  const result = await client.rpc("claim_user_login_session", {p_session_id:sessionId});
+  if(result.error) return {ok:false, error:result.error};
+  return result.data === true ? {ok:true, sessionId} : {ok:false, occupied:true};
+}
 
 async function init(){
   // Bind UI first: a slow getSession() must never leave the form unbound (form would reload the page).
@@ -314,6 +384,7 @@ async function init(){
   $("logoutBtn").addEventListener("click", logout);
   $("refreshBtn").addEventListener("click", () => loadPage(state.page));
   $("mobileMenu").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
+  ["pointerdown","pointermove","keydown","touchstart"].forEach(event => document.addEventListener(event, noteLoginActivity, {passive:true}));
   document.addEventListener("click", e => {
     const sb = document.querySelector(".sidebar");
     if(sb.classList.contains("open") && !e.target.closest(".sidebar, #mobileMenu")) sb.classList.remove("open");
@@ -352,22 +423,42 @@ async function login(e){
       const lookup = await state.supabase.rpc("get_login_email", {p_username: username});
       if(!lookup.error && lookup.data) authEmail = lookup.data;
     } catch (_) {}
-    const {data, error} = await state.supabase.auth.signInWithPassword({email: authEmail, password});
+    const authClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {auth:{persistSession:false, autoRefreshToken:false, detectSessionInUrl:false}});
+    const {data, error} = await authClient.auth.signInWithPassword({email: authEmail, password});
     if(error){
       setLoginMessage(error.status && error.status < 500 && error.status !== 0 ? "Invalid username or password." : "Cannot reach the server. Check internet and try again.","error");
       return;
     }
+    const lease = await claimLoginLease(data.user, authClient);
+    if(lease.error){
+      await authClient.auth.signOut({scope:"local"});
+      setLoginMessage("Single-login security is not set up yet. Ask Admin to apply the LOGIN SESSION SECURITY section in database.sql.","error");
+      return;
+    }
+    if(lease.occupied){
+      await authClient.auth.signOut({scope:"local"});
+      setLoginMessage("This user is already logged in elsewhere. Log out there or wait 30 minutes after inactivity.","error");
+      return;
+    }
+    const installed = await state.supabase.auth.setSession(data.session);
+    if(installed.error){
+      await authClient.rpc("release_user_login_session", {p_session_id:lease.sessionId});
+      await authClient.auth.signOut({scope:"local"});
+      setLoginMessage("Could not start this login session. Please try again.","error");
+      return;
+    }
     $("password").value = "";
-    showApp(data.user);
   } catch(err){
     setLoginMessage("Cannot reach the server. Check internet and try again.","error");
   } finally { btn.disabled = false; }
 }
 async function logout(){
-  if(state.supabase) await state.supabase.auth.signOut();
+  await releaseLoginLease();
+  if(state.supabase) await state.supabase.auth.signOut({scope:"local"});
   showLogin();
 }
 function showLogin(){
+  stopLoginLease();
   state.user = null; state.profile = null; state.role = ""; state.isAdmin = false; state.perms = new Set(); state.locations = null; state.settings = null;
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");
@@ -375,6 +466,18 @@ function showLogin(){
 }
 
 async function showApp(user){
+  let lease;
+  try { lease = await claimLoginLease(user); }
+  catch(err){ lease = {ok:false,error:err}; }
+  if(!lease.ok){
+    try { await state.supabase.auth.signOut({scope:"local"}); } catch {}
+    showLogin();
+    setLoginMessage(lease.occupied
+      ? "This user is already logged in elsewhere. Log out there or wait 30 minutes after inactivity."
+      : "Single-login security is not set up or could not be checked. Ask Admin to apply the LOGIN SESSION SECURITY section in database.sql.", "error");
+    return;
+  }
+  startLoginLease(user.id, lease.sessionId);
   state.user = user;
   $("loginView").classList.add("hidden");
   $("appView").classList.remove("hidden");
@@ -385,7 +488,8 @@ async function showApp(user){
     if(p.error) console.warn(p.error.message);
     if(p.data){
       if(p.data.active === false){
-        await state.supabase.auth.signOut();
+        await releaseLoginLease();
+        await state.supabase.auth.signOut({scope:"local"});
         showLogin();
         setLoginMessage("This user is inactive. Contact Admin.","error");
         return;
@@ -480,14 +584,14 @@ async function loadPage(page){
   if(!can(page)){ renderDenied(); return; }
   const item = MENU.flatMap(x => x.items).find(x => x[0] === page);
   $("pageTitle").textContent = item?.[1] || "Dashboard";
-  $("pageSubtitle").textContent = "Kothari Hyundai • Live Vehicle Inventory";
+  $("pageSubtitle").textContent = "Live Vehicle Inventory";
   $("content").scrollTop = 0; window.scrollTo(0, 0);
   try {
     if(page === "dashboard") return await renderDashboard();
     if(["vehicles","search","status"].includes(page)) return await renderVehicles(page);
     if(page === "timeline") return await renderTimeline();
     if(page === "documents") return await renderDocuments();
-    if(["order-import","purchase-import","sales-import","import-history","import-data"].includes(page)) return await renderImport(page);
+    if(["data-import","order-import","purchase-import","manual-purchase","sales-import","delivery-import","import-history","import-data"].includes(page)) return await renderImport(page);
     if(["bhilarwadi","gate","gate-pass","register"].includes(page)) return await renderGate(page);
     if(["delivery-entry","delivered","delivery-history"].includes(page)) return await renderDelivery(page);
     if(page.endsWith("-report")) return await renderReport(page);

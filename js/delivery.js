@@ -12,6 +12,18 @@ const DEL_FIELDS = [
   ["color","COLOUR","text","Purchase report"], ["finance_company","FINANCE NAME","text","Purchase report"], ["customer_name","CUSTOMER NAME","text","Sales report"],
   ["bill_no","TALLY INVOICE NO","text","Sales report"]
 ];
+const DEL_ENTRY_FIELDS = [
+  ["main_dealer",FIELD_HEADING.main_dealer,"Purchase report"],["dealer_code",FIELD_HEADING.dealer_code,"Purchase report"],["excise_invoice_no",FIELD_HEADING.excise_invoice_no,"Purchase report"],
+  ["hmi_invoice_no",FIELD_HEADING.hmi_invoice_no,"Purchase report"],["order_date",FIELD_HEADING.order_date,"Purchase report","date"],["order_no",FIELD_HEADING.order_no,"Purchase report"],
+  ["hmi_invoice_date",FIELD_HEADING.hmi_invoice_date,"Purchase report","date"],["hmi_invoice_amount",FIELD_HEADING.hmi_invoice_amount,"Purchase report","money"],
+  ["bhilarwadi_in_date","BHILARWADI VEHICLE IN DT","Bhilarwadi IN"],["model","Model","Purchase report"],["variant","Variant","Purchase report"],
+  ["color",FIELD_HEADING.color,"Purchase report"],["vin",FIELD_HEADING.vin,"Vehicle Stock"],["basic_price",FIELD_HEADING.basic_price,"Purchase report","money"],
+  ["freight_insurance",FIELD_HEADING.freight_insurance,"Purchase report","money"],["total_invoice_value",FIELD_HEADING.total_invoice_value,"Purchase report","money"],
+  ["gst","GST","Purchase report","money"],["comp_cess","Comp Cess","Purchase report","money"],["engine_no","Engine No","Purchase report"],
+  ["finance_company",FIELD_HEADING.finance_company,"Purchase report"],["delivery_date",FIELD_HEADING.delivery_date,"manual","date"],
+  ["delivery_location",FIELD_HEADING.sales_location,"Sales report"],["bill_date",FIELD_HEADING.bill_date,"Sales report","date"],
+  ["bill_no",FIELD_HEADING.bill_no,"Sales report"],["customer_name",FIELD_HEADING.customer_name,"Sales report"]
+];
 const DEL_COLS = [
   ["Delivery Date","delivery_date","date"],["VIN No.","vin"],["Engine No","engine_no"],["Model","model"],["Variant","variant"],["Colour","color"],
   ["Customer Name","customer_name"],["Tally Invoice No","bill_no"],["Financier Name","finance_company"],["Delivery Location","dloc"]
@@ -46,12 +58,10 @@ async function renderDelivery(page){
   if(page !== "delivery-entry") return renderDeliveryList(page, titles[page]);
   await getLocations(); DEL.vehicle = null;
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Delivery Entry</h3></div>
-  <p class="form-help">Enter the VIN and press <b>Fetch</b> (or Enter): Engine No, Model, Variant, Colour, Finance Name come from the <b>Purchase report</b>; Customer Name, Tally Invoice No from the <b>Sales report</b>. Every field can be changed or typed manually.</p>
+  <p class="form-help">Enter the VIN and press <b>Fetch</b> (or Enter). Purchase details, Bhilarwadi IN date and Sales details are fetched from their reports. Enter the Delivery Date manually.</p>
   <form id="deliveryForm" class="form-grid">
     <div class="full"><label for="d_vin">VIN *</label><div class="searchbox" style="max-width:none"><input id="d_vin" name="vin" required autocomplete="off" placeholder="VIN or last 6 digits"><button type="button" id="d_fetch">Fetch</button></div><div id="d_info" class="form-help"></div></div>
-    ${DEL_FIELDS.map(([k, l, , h]) => delInput(k, l, "", h)).join("")}
-    <div><label for="d_delivery_location">DELIVERY LOCATION</label><select id="d_delivery_location" name="delivery_location">${delLocOptions("")}</select></div>
-    <div><label for="d_delivery_date">DELIVERY DATE</label><input id="d_delivery_date" name="delivery_date" type="date" value="${todayLocal()}"></div>
+    ${DEL_ENTRY_FIELDS.filter(([k]) => k !== "vin").map(([k,label,source,type]) => `<div><label for="d_${k}">${esc(label)}${source ? ` <small style="font-weight:400;color:#98a2b3">(${esc(source)})</small>` : ""}</label><input id="d_${k}" name="${k}" type="${type === "date" ? "date" : "text"}" ${source === "manual" ? "" : "readonly"} ${k === "delivery_date" ? `value="${todayLocal()}"` : ""}></div>`).join("")}
     <div class="full form-actions"><button class="primary-btn" type="submit">Complete Delivery</button></div></form></div>`;
   $("deliveryForm").addEventListener("submit", saveDelivery);
   $("d_fetch").addEventListener("click", delFetchInto);
@@ -64,9 +74,17 @@ async function delFetchInto(){
   const r = await delFindVehicle($("d_vin").value);
   if(r.error){ DEL.vehicle = null; info.textContent = r.error + " You can still type the details manually only after the VIN exists in stock."; info.style.color = "#b42318"; return; }
   const v = r.v; DEL.vehicle = v; $("d_vin").value = v.vin;
-  DEL_FIELDS.forEach(([k]) => { $("d_" + k).value = v[k] ?? ""; });
-  const sl = v.delivery_location || v.sales_location || (v.location_id ? locName(v.location_id) : "");
-  $("d_delivery_location").innerHTML = delLocOptions(sl);
+  const inMovement = await state.supabase.from("gate_movements").select("receipt_dt,created_at").eq("vin", v.vin).eq("gate_name", "Bhilarwadi").eq("movement_type", "IN").order("created_at", {ascending:false}).limit(1).maybeSingle();
+  const values = {...v,
+    bhilarwadi_in_date:inMovement.data?.receipt_dt || inMovement.data?.created_at || "",
+    gst:Number(v.igst || 0) + Number(v.cgst || 0) + Number(v.sgst || 0),
+    delivery_location:v.sales_location || ""
+  };
+  DEL_ENTRY_FIELDS.forEach(([k,,source,type]) => {
+    const el = $("d_" + k); if(!el) return;
+    const value = values[k] ?? "";
+    el.value = type === "date" && value ? String(value).slice(0,10) : type === "money" && k === "gst" ? String(value) : value;
+  });
   const purchase = !isBlank(v.hmi_invoice_no) || !isBlank(v.engine_no), sales = !isBlank(v.bill_no) || !isBlank(v.sales_imported_at);
   info.style.color = vStage(v) === "delivered" ? "#b42318" : "#027a48";
   info.textContent = `Status: ${v.status || "-"} · Purchase data: ${purchase ? "found" : "not found (type manually)"} · Sales data: ${sales ? "found" : "not found (type manually)"}` + (vStage(v) === "delivered" ? " · Already delivered — saving again will update it." : "");
@@ -90,7 +108,7 @@ async function saveDelivery(e){
     const f = {}; for(const [k, v] of new FormData(e.target).entries()) f[k] = delClean(v);
     const r = await delFindVehicle(f.vin); if(r.error){ toast(r.error,"error"); return; }
     const v = r.v;
-    if(vStage(v) === "delivered" && !confirm("This vehicle is already marked delivered. Save another delivery entry?")) return;
+    if(vStage(v) !== "bill"){ toast("Not in Tally Done. Delivery cannot be completed.", "error"); return; }
     if(!f.delivery_date) f.delivery_date = todayLocal();
     importDropped.clear();
     let ins = await importWrite(b => state.supabase.from("deliveries").insert(b), delRowPayload(f, v.id));
@@ -122,8 +140,7 @@ function delFiltered(){
 async function renderDeliveryList(page, title){
   DEL.from = DEL.to = DEL.loc = DEL.q = "";
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>${esc(title)}</h3>
-    <div class="report-tools"><button class="secondary-btn" type="button" id="recentDeliveryToggle" aria-expanded="false">Recent Delivery Entries</button><button class="secondary-btn" type="button" id="delExport">⤓ Export to Excel</button></div></div>
-    <section id="recentDeliverySection" class="timeline-recent delivery-recent" hidden><div id="recentDeliveryResults" class="table-wrap">${emptyState("Loading recent delivery entries...")}</div></section>
+    <div class="report-tools"><button class="secondary-btn" type="button" id="delExport" title="Export delivery records">⤓ Export</button></div></div>
     <div class="delivery-filter-row">
       <label class="delivery-vin-search">Search VIN<input id="delQ" type="search" placeholder="Enter VIN / last 6 digits" autocomplete="off"></label>
       <label class="delivery-location-filter">Delivery location<select id="delLoc"><option value="">All locations</option></select></label>
@@ -137,9 +154,21 @@ async function loadDeliveries(){
   const box = $("deliveryResults"); if(!box || !state.supabase) return;
   try {
     const all = await allVehicles(true); await getLocations();
-    DEL.rows = all.filter(v => vStage(v) === "delivered")
-      .map(v => ({...v, dno:v.delivery_no || v.grn_no || "", dloc:v.delivery_location || (v.location_id ? locName(v.location_id) : "")}))
-      .sort((a, b) => String(b.delivery_date || "").localeCompare(String(a.delivery_date || "")));
+    const vehiclesById = new Map(all.map(v => [String(v.id),v]));
+    const deliveryRecords = await fetchAll(() => state.supabase.from("deliveries").select("*").order("created_at",{ascending:false}), {max:50000});
+    const seenVehicles = new Set();
+    const fromDeliveries = deliveryRecords.map(d => {
+      const vehicle = vehiclesById.get(String(d.vehicle_id));
+      if(!vehicle || seenVehicles.has(String(vehicle.id))) return null;
+      seenVehicles.add(String(vehicle.id));
+      return {...vehicle,...d,id:vehicle.id,delivery_record_id:d.id,status:vStage(vehicle) === "delivered" ? vehicle.status : window.APP_CONFIG.deliveredStatus,
+        delivery_date:d.delivery_date || vehicle.delivery_date || d.created_at,dno:d.delivery_no || vehicle.delivery_no || vehicle.grn_no || "",
+        dloc:d.delivery_location || vehicle.delivery_location || vehicle.sales_location || (vehicle.location_id ? locName(vehicle.location_id) : "")};
+    }).filter(Boolean);
+    const withoutDeliveryRecord = all.filter(v => vStage(v) === "delivered" && !seenVehicles.has(String(v.id)))
+      .map(v => ({...v,dno:v.delivery_no || v.grn_no || "",dloc:v.delivery_location || v.sales_location || (v.location_id ? locName(v.location_id) : "")}));
+    DEL.rows = [...fromDeliveries,...withoutDeliveryRecord]
+      .sort((a,b) => String(b.delivery_date || b.created_at || "").localeCompare(String(a.delivery_date || a.created_at || "")));
     const locs = sortLocationNames(new Set([...(state.locations || []).map(l => l.location_name), ...DEL.rows.map(v => v.dloc).filter(Boolean)]));
     $("delLoc").innerHTML = `<option value="">All locations</option>` + locs.map(n => `<option ${n === DEL.loc ? "selected" : ""}>${esc(n)}</option>`).join("");
     const pg = mountPaged(box, {headers:[...DEL_COLS.map(c => c[0]), ""], empty:"No delivered vehicles for this filter.",
@@ -151,12 +180,6 @@ async function loadDeliveries(){
       }});
     const meta = () => { $("delMeta").textContent = `${delFiltered().length.toLocaleString("en-IN")} of ${DEL.rows.length.toLocaleString("en-IN")} delivered vehicles`; };
     const apply = () => { DEL.from = $("delFrom").value; DEL.to = $("delTo").value; DEL.loc = $("delLoc").value; DEL.q = $("delQ").value; meta(); pg.reset(); };
-    $("recentDeliveryToggle").onclick = async () => {
-      const section = $("recentDeliverySection"), button = $("recentDeliveryToggle");
-      section.hidden = !section.hidden;
-      button.setAttribute("aria-expanded", String(!section.hidden));
-      if(!section.hidden) await loadRecentDeliveryEntries(DEL.rows);
-    };
     ["delFrom","delTo","delLoc","delQ"].forEach(id => { $(id).oninput = apply; $(id).onchange = apply; });
     $("delClear").onclick = () => { ["delFrom","delTo","delLoc","delQ"].forEach(id => { $(id).value = ""; }); apply(); };
     $("delExport").onclick = () => {
@@ -166,33 +189,8 @@ async function loadDeliveries(){
     apply();
   } catch(err){ box.innerHTML = emptyState("Could not load: " + (err.message || err)); }
 }
-async function loadRecentDeliveryEntries(vehicles){
-  const box = $("recentDeliveryResults");
-  if(!box) return;
-  try {
-    const rows = await fetchAll(() => state.supabase.from("deliveries").select("*").order("created_at",{ascending:false}), {max:50000});
-    const deliveryById = new Map(rows.map(d => [String(d.vehicle_id),d]));
-    const entries = vehicles.map(vehicle => {
-      const d = deliveryById.get(String(vehicle.id)) || {};
-      return {...vehicle,...d,vin:vehicle.vin || d.vin || "",delivery_date:d.delivery_date || vehicle.delivery_date || d.created_at,
-        dloc:d.delivery_location || vehicle.delivery_location || (vehicle.location_id ? locName(vehicle.location_id) : "")};
-    }).filter(row => row.vin && vStage(row) === "delivered")
-      .sort((a,b) => String(b.delivery_date || b.created_at || "").localeCompare(String(a.delivery_date || a.created_at || "")));
-    mountPaged(box,{
-      headers:["Delivery Date","VIN","Delivered Vehicle","Delivery Status","Customer","Tally Invoice No","Delivery Location"],
-      rows:entries.map(v => [
-        fmtD(v.delivery_date),raw(`<b class="mono">${esc(v.vin)}</b>`),v.model || v.variant || "-",
-        statusBadge(v.status || "Delivered"),v.customer_name || "-",v.bill_no || "-",v.dloc || "-"
-      ]),
-      size:10,empty:"No delivered vehicles found."
-    });
-  } catch(err){
-    box.innerHTML = emptyState("Could not load recent delivery entries: " + (err.message || err));
-  }
-}
-
 /* ---------------------------------------------------------------- Edit / Delete delivery entry */
-async function delEdit(id){
+async function delEdit(id, reload = loadDeliveries){
   const v = DEL.rows.find(x => String(x.id) === String(id)); if(!v) return;
   const sb = state.supabase;
   const d = (await sb.from("deliveries").select("*").eq("vehicle_id", v.id).limit(1)).data?.[0] || {};
@@ -220,18 +218,25 @@ async function delEdit(id){
                   : await importWrite(b => sb.from("deliveries").insert(b), {...payload, vehicle_id:v.id});
     if(x.error) toast("Vehicle updated, delivery record not updated: " + x.error.message, "error");
     else toast("Delivery updated.", "success");
-    VCACHE.rows = null; logAudit("UPDATE_DELIVERY","delivery","vehicles",v.id,f); closeModal(); loadDeliveries();
+    VCACHE.rows = null; logAudit("UPDATE_DELIVERY","delivery","vehicles",v.id,f); closeModal(); reload();
   });
 }
-async function delDelete(id){
+async function deleteDeliveryRecord(v){
+  if(!v) return {error:"Vehicle not found."};
+  const back = (!isBlank(v.bill_no) || !isBlank(v.sales_imported_at)) ? "Tally Done" : v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";
+  const sb = state.supabase; importDropped.clear();
+  const d = await sb.from("deliveries").delete().eq("vehicle_id", v.id).select("vehicle_id");
+  if(d.error) return {error:d.error.message};
+  const up = await importWrite(b => sb.from("vehicles").update(b).eq("id", v.id).select("id"), {status:back, delivery_date:null, delivery_location:null});
+  if(up.error || !up.data?.length) return {error:up.error?.message || "Not changed — no permission to edit / delete."};
+  VCACHE.rows = null; logAudit("DELETE_DELIVERY","delivery","vehicles",v.id,{vin:v.vin, back});
+  return {back};
+}
+async function delDelete(id, reload = loadDeliveries){
   const v = DEL.rows.find(x => String(x.id) === String(id)); if(!v) return;
   const back = (!isBlank(v.bill_no) || !isBlank(v.sales_imported_at)) ? "Tally Done" : v.location_id ? "In Stock" : (!isBlank(v.hmi_invoice_no) || !isBlank(v.purchase_date)) ? "In Transit" : "Pending Order";
   if(!confirm(`Delete the delivery entry of ${v.vin}?\n\nThe vehicle goes back to "${statusLabel(back)}". The vehicle record itself is kept.`)) return;
-  const sb = state.supabase; importDropped.clear();
-  const d = await sb.from("deliveries").delete().eq("vehicle_id", v.id).select("vehicle_id");
-  if(d.error) return toast(d.error.message, "error");
-  const up = await importWrite(b => sb.from("vehicles").update(b).eq("id", v.id).select("id"), {status:back, delivery_date:null, delivery_location:null});
-  if(up.error || !up.data?.length) return toast("Not changed — no permission to edit / delete.", "error");
-  VCACHE.rows = null; logAudit("DELETE_DELIVERY","delivery","vehicles",v.id,{vin:v.vin, back});
-  toast("Delivery entry deleted.", "success"); loadDeliveries();
+  const result = await deleteDeliveryRecord(v);
+  if(result.error) return toast(result.error, "error");
+  toast("Delivery entry deleted.", "success"); reload();
 }

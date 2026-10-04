@@ -125,7 +125,13 @@ async function renderGate(page){
   $("gateReceiptDate").value = todayLocal();
   $("gateMovementType").addEventListener("change", () => updateGateMovementLocation(gateName,$("gateMovementType").value));
   $("gateForm").addEventListener("submit", saveGate);
-  $("gateScan").addEventListener("click", () => openScanner(v => { $("gateVin").value = v; $("gateVin").dispatchEvent(new Event("input")); toast("Scanned " + v, "success"); }));
+  $("gateScan").addEventListener("click", () => openScanner((v, qrPhoto) => {
+    $("gateVin").value = v;
+    state.gateSelectedVehicleId = null;
+    const qrSaved = gateName !== "Bhilarwadi" || setScannedInPhoto("gi", "photo_right_side_qr", qrPhoto);
+    void loadPurchaseVehicleDetails(v, true);
+    toast(qrSaved ? "Scanned " + v + " and attached QR photo." : "VIN scanned, but QR image could not be captured. Take the Vehicle Right Side QR Photo before saving.", qrSaved ? "success" : "error");
+  }, {captureImage:gateName === "Bhilarwadi"}));
   $("gateClear").addEventListener("click", clearGateForm);
   let lookupTimer;
   $("gateVin").addEventListener("input", () => { clearTimeout(lookupTimer); lookupTimer = setTimeout(() => loadPurchaseVehicleDetails($("gateVin").value.trim(), true), 250); });
@@ -168,7 +174,9 @@ async function loadPurchaseVehicleDetails(value, showSuggestions = true){
   if(!state.supabase || !value) return;
   const input = cleanQuery(value).replace(/\s+/g,"").toUpperCase();
   if(input.length < 3){ hideGateSuggestions(); return; }
-  const r = await state.supabase.from("vehicles").select("*").ilike("vin", `%${input.length >= 6 ? input.slice(-6) : input}%`).limit(20);
+  let query = state.supabase.from("vehicles").select("*");
+  query = input.length >= 17 ? query.eq("vin", input) : query.ilike("vin", `%${input.length >= 6 ? input.slice(-6) : input}%`);
+  const r = await query.limit(20);
   if(r.error){ setLookupMsg("Purchase Report lookup unavailable. Manual entry enabled.","error-text"); hideGateSuggestions(); return; }
   const rows = r.data || [];
   if(showSuggestions){
@@ -198,6 +206,7 @@ function applyPurchaseVehicle(v){
 function clearGateForm(){
   const form = $("gateForm"); if(!form) return;
   form.reset();
+  clearScannedInPhotos("gi");
   state.gateSelectedVehicleId = null;
   $("gateReceiptDate").value = todayLocal();
   document.querySelectorAll("#gateForm .in-note").forEach(n => { n.textContent = ""; });
@@ -293,8 +302,8 @@ async function fetchGateRows(limit = 100, gate = ""){
       || [v.delivery_location,v.sales_location].some(name => String(name || "").trim().toLowerCase() === assignedName.trim().toLowerCase())
     ))}; }).filter(x => x._assignedLocationMatch).map(({_assignedLocationMatch, ...x}) => x);
 }
-function gatePlainRow(x, i, gate = "", includeSerial = true){
-  const row = [fmtD(x.receipt_dt || x.created_at), ...(includeSerial ? [i + 1] : []), x.movement_type, gateLocOf(x), x.vin, x.engine_no, x.variant, x.color, x.finance_bank, x.movement_reason,
+function gatePlainRow(x, i, gate = "", includeSerial = true, colorMovement = false){
+  const row = [fmtD(x.receipt_dt || x.created_at), ...(includeSerial ? [i + 1] : []), colorMovement ? movementTypeBadge(x.movement_type) : x.movement_type, gateLocOf(x), x.vin, x.engine_no, x.variant, x.color, x.finance_bank, x.movement_reason,
     [x.driver_name, x.driver_mobile].filter(Boolean).join(" / "), x.remarks];
   return gate === "Bhilarwadi" ? row.filter((_, k) => k !== (includeSerial ? 10 : 9)) : row;
 }
@@ -318,7 +327,7 @@ async function loadGateRegister(){
     const canEdit = canEditGate();
     mountPaged(box, {
       headers:[...GATE_COLS_ALL, ...(canEdit ? ["Action"] : [])],
-      rows:GATE_ROWS.map((x,i) => [...gatePlainRow(x, i), ...(canEdit ? [raw(`<button class="table-icon-btn" type="button" title="Edit" data-register-edit="${i}">✎</button><button class="table-icon-btn danger" type="button" title="Delete" data-register-delete="${i}">🗑</button>`)] : [])]),
+      rows:GATE_ROWS.map((x,i) => [...gatePlainRow(x, i, "", true, true), ...(canEdit ? [raw(`<button class="table-icon-btn" type="button" title="Edit" data-register-edit="${i}">✎</button><button class="table-icon-btn danger" type="button" title="Delete" data-register-delete="${i}">🗑</button>`)] : [])]),
       size:50, empty:"No gate movements yet.",
       onDraw:el => {
         el.querySelectorAll("[data-register-edit]").forEach(b => b.addEventListener("click", () => openGateEdit(GATE_ROWS[+b.dataset.registerEdit], loadGateRegister)));

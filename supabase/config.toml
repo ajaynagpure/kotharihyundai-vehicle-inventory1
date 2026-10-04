@@ -9,3 +9,6 @@ verify_jwt = true
 
 [functions.delete-user]
 verify_jwt = true
+
+[functions.update-user-credentials]
+verify_jwt = true

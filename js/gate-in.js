@@ -7,6 +7,7 @@ const GATE_BUCKET = "gate-photos";
 const IN_PHOTOS = [["photo_front","1. Vehicle Front Photo"],["photo_chassis_no","2. Vehicle Chassis No. Photo"],["photo_chassis_plate","3. Vehicle Chassis Plate Photo"],
   ["photo_form22","4. FORM 22 Photo"],["photo_cng_cert","5. Vehicle CNG Certificate Photo"],["photo_cng_kit","6. Vehicle CNG Kit Photo"],
   ["photo_ecu","7. Vehicle ECU Photo"],["photo_right_side_qr","8. Vehicle Right Side QR Photo"]];
+const IN_SCANNED_FILES = new Map();
 const IN_REQUIRED_PHOTOS = [...IN_PHOTOS.slice(0,4), IN_PHOTOS[7]];
 const inCount = x => IN_PHOTOS.filter(([k]) => x && x[k]).length;
 const inPhotoPaths = x => IN_PHOTOS.map(([k]) => x?.[k]).filter(Boolean);
@@ -24,9 +25,17 @@ function inBlockHtml(p){
 // Read the fields of an IN block. `keep` = files already chosen earlier (bulk modal), so re-opening does not lose them.
 function readIn(p, keep = {}){
   const files = {...keep};
-  for(const [k] of IN_PHOTOS){ const f = document.getElementById(`${p}_${k}`)?.files?.[0]; if(f) files[k] = f; }
+  for(const [k] of IN_PHOTOS){ const input = document.getElementById(`${p}_${k}`), f = input?.files?.[0] || IN_SCANNED_FILES.get(input?.id); if(f) files[k] = f; }
   return {files, tyres:[1,2,3,4].map(n => document.getElementById(`${p}_tyre${n}`)?.value.trim() || ""), ev:document.getElementById(`${p}_ev`)?.value.trim() || ""};
 }
+function setScannedInPhoto(p, key, file){
+  if(!file) return false;
+  const id = `${p}_${key}`, note = document.getElementById(`${id}_n`);
+  IN_SCANNED_FILES.set(id, file);
+  if(note) note.textContent = "✔ Vehicle Right Side QR Photo captured from scan";
+  return true;
+}
+function clearScannedInPhotos(p){ for(const id of IN_SCANNED_FILES.keys()) if(id.startsWith(`${p}_`)) IN_SCANNED_FILES.delete(id); }
 function setIn(p, d){
   if(!d) return;
   d.tyres.forEach((t,i) => { const el = document.getElementById(`${p}_tyre${i+1}`); if(el) el.value = t; });
@@ -44,6 +53,7 @@ function bindGateIn(){
 }
 document.addEventListener("change", e => {          // show chosen file name under every photo input
   const t = e.target; if(!t.classList?.contains("in-file")) return;
+  if(t.files[0]) IN_SCANNED_FILES.delete(t.id);
   const photo = IN_PHOTOS.find(([k]) => t.id.endsWith("_" + k));
   const n = document.getElementById(t.id + "_n");
   if(n) n.textContent = t.files[0] ? "✔ " + (photo ? inPhotoBaseName(photo[1]) + ".jpg" : t.files[0].name) : "";

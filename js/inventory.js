@@ -5,14 +5,14 @@
 
 const col = (h, k, t = "text") => ({h, k, t});
 
-const STOCK_COLS = [col("Total Vehicles","vehicle_count","num"), col("Free Stock","stock_count","num"), col("In Transit","in_transit_count","num"), col("Pending Order","pending_count","num"), col("Tally Done","bill_count","num"), col("Free Stock Value","stock_value","money"), col("In Transit Value","in_transit_value","money")];
+const STOCK_COLS = [col("Free Stock","stock_count","num"), col("Free Stock Value","stock_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Total Count","total_count","num"), col("Grand Total Value","total_value","money")];
 const REPORTS = {
   "location-report": {title:"Location wise Stock", source:"location_stock_report", totals:true, sort:["total_count","desc"], dim:"location",
     cols:[col("Location","location_name"), col("Free Stock","stock_count","num"), col("Free Stock Value","stock_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Total Count","total_count","num"), col("Grand Total Value","total_value","money")]},
   "model-report": {title:"Model Stock", source:"model_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"model",
     cols:[col("Model","model"), ...STOCK_COLS]},
-  "finance-report": {title:"Finance-wise Free Stock", source:"finance_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"finance",
-    cols:[col("Financier Name","finance_company"), col("Free Stock","stock_count","num"), col("Free Stock Value","stock_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("Grand Total Value","total_value","money")]},
+  "finance-report": {title:"Finance-wise Free Stock", source:"finance_stock_report", totals:true, sort:["total_count","desc"], dim:"finance",
+    cols:[col("Financier Name","finance_company"), col("Free Stock","stock_count","num"), col("Free Stock Value","stock_value","money"), col("Tally Done","bill_count","num"), col("Tally Done Value","bill_value","money"), col("In Transit","in_transit_count","num"), col("In Transit Value","in_transit_value","money"), col("Total Count","total_count","num"), col("Grand Total Value","total_value","money")]},
   "dealer-report": {title:"Dealer Code-wise Free Stock", source:"dealer_code_stock_report", totals:true, sort:["vehicle_count","desc"], dim:"dealer",
     cols:[col("Dealer","dealer_code"), ...STOCK_COLS]},
   "aging-report": {editable:true, title:"Aging Report", source:"aging_report", sort:["aging_days","desc"],
@@ -26,7 +26,7 @@ const REPORTS = {
   "arriving-report": {title:"Arriving Vehicles — OUT, awaiting IN", source:"awaiting_arrival_report", sort:["movement_time","desc"],
     cols:[col("OUT Date","movement_time","datetime"), col("VIN / Vehicle No.","vin"), col("Model","model"), col("Stock Status","status"), col("IN Location","in_location"), col("OUT Location","out_location"), col("Gate","gate_name")]},
   "gate-report": {title:"Gate Movement Report", source:"gate_movement_report", sort:["movement_time","desc"],
-    cols:[col("Date","movement_time","datetime"), col("Type","movement_type"), col("VIN","vin"), col("From","from_location"), col("To","to_location"), col("Gate","gate_name")]}
+    cols:[col("Date & Time","movement_time","datetime"), col("Chassis No.","vin"), col("Model","model"), col("Type","movement_type"), col("From","from_location"), col("To","to_location"), col("Status","status")]}
 };
 
 /* ---------------------------------------------------------------- Dashboard */
@@ -132,7 +132,8 @@ function totalStockPieHtml(items){
 
 async function loadDashboardData(){
   const safe = p => Promise.resolve(p).then(data => ({data, error:null}), error => ({error, data:null}));
-  const [allRes, gate] = await Promise.all([safe(allVehicles()), safe(computedRows("gate_movement_report"))]);
+  const [allRes, gate] = await Promise.all([safe(allVehicles()), safe(gateRowsFallback([]))]);
+  if(!gate.error) gate.data = gateRowsWithVehicles(gate.data, allRes.data || []);
   await getLocations();
   const locationSelect = $("dashLocation");
   if(locationSelect && !locationSelect.dataset.ready){
@@ -178,9 +179,25 @@ async function loadDashboardData(){
     const fin = stageGroup(all, DIMS.finance.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => (b.n.stock + b.n.transit + b.n.bill) - (a.n.stock + a.n.transit + a.n.bill));
     const financeTotalValue = g => g.v.stock + g.v.transit + g.v.bill;
     const financeTotalCount = g => g.n.stock + g.n.transit + g.n.bill;
-    draw("financeDash", ["Financier\nName","Free\nStock","Free Stock\nValue","In\nTransit","Transit\nValue","Total\nCount","Total\nValue"], fin,
-      g => [g.key, dimNum(g.n.stock,"finance",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"finance",g.key,"transit"), moneyShort(g.v.transit), dimNum(financeTotalCount(g),"finance",g.key,"stock-transit-bill"), moneyShort(financeTotalValue(g))],
-      gs => [B("Grand Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(gs.reduce((t,g) => t + financeTotalCount(g), 0)), MS(gs.reduce((t,g) => t + financeTotalValue(g), 0))]);
+    draw("financeDash", ["Financier\nName","Free Stock","Free Stock Value","Tally Done","Tally Done Value","In Transit","In Transit Value","Total Count","Grand Total Value"], fin,
+      g => [g.key,
+        dimNum(g.n.stock,"finance",g.key,"stock"),
+        moneyShort(g.v.stock),
+        dimNum(g.n.bill,"finance",g.key,"bill"),
+        moneyShort(g.v.bill),
+        dimNum(g.n.transit,"finance",g.key,"transit"),
+        moneyShort(g.v.transit),
+        dimNum(financeTotalCount(g),"finance",g.key,"stock-transit-bill"),
+        moneyShort(financeTotalValue(g))],
+      gs => [B("Grand Total"),
+        N(tot(gs,"n","stock")),
+        MS(tot(gs,"v","stock")),
+        N(tot(gs,"n","bill")),
+        MS(tot(gs,"v","bill")),
+        N(tot(gs,"n","transit")),
+        MS(tot(gs,"v","transit")),
+        N(gs.reduce((t,g) => t + financeTotalCount(g), 0)),
+        MS(gs.reduce((t,g) => t + financeTotalValue(g), 0))]);
     // 7. Dealer code wise: available, in transit, bill / not delivered (count + short value)
     const dealerPriority = ["W2203","W2230","W2A08","W2281","W2283"], dealerRank = new Map(dealerPriority.map((name,i) => [name,i]));
     const dea = stageGroup(all, DIMS.dealer.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => {
@@ -188,9 +205,9 @@ async function loadDashboardData(){
       if(ai !== undefined || bi !== undefined) return (ai ?? Infinity) - (bi ?? Infinity);
       return b.n.stock - a.n.stock || b.n.transit - a.n.transit;
     });
-    draw("dealerDash", ["Dealer","Free Stock","Value","In Transit","Value","Tally Done","Value","Total Count","Grand Total Value"], dea,
-      g => [g.key, dimNum(g.n.stock,"dealer",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.transit,"dealer",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.bill,"dealer",g.key,"bill"), moneyShort(g.v.bill), dimNum(g.n.stock + g.n.transit + g.n.bill,"dealer",g.key,"stock-transit-bill"), moneyShort(g.v.stock + g.v.transit + g.v.bill)],
-      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(gs.reduce((t,g) => t + g.n.stock + g.n.transit + g.n.bill, 0)), MS(gs.reduce((t,g) => t + g.v.stock + g.v.transit + g.v.bill, 0))]);
+    draw("dealerDash", ["Dealer","Free Stock","Free Stock Value","Tally Done","Tally Done Value","In Transit","In Transit Value","Total Count","Grand Total Value"], dea,
+      g => [g.key, dimNum(g.n.stock,"dealer",g.key,"stock"), moneyShort(g.v.stock), dimNum(g.n.bill,"dealer",g.key,"bill"), moneyShort(g.v.bill), dimNum(g.n.transit,"dealer",g.key,"transit"), moneyShort(g.v.transit), dimNum(g.n.stock + g.n.transit + g.n.bill,"dealer",g.key,"stock-transit-bill"), moneyShort(g.v.stock + g.v.transit + g.v.bill)],
+      gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(gs.reduce((t,g) => t + g.n.stock + g.n.transit + g.n.bill, 0)), MS(gs.reduce((t,g) => t + g.v.stock + g.v.transit + g.v.bill, 0))]);
     // 9. Location wise available stock: Free Stock + Tally Done count and value
     const loc = stageGroup(all, DIMS.location.of).filter(g => g.n.stock + g.n.transit + g.n.bill).sort((a,b) => compareLocationNames(a.key,b.key));
     const locationTotalCount = g => g.n.stock + g.n.transit + g.n.bill;
@@ -204,9 +221,25 @@ async function loadDashboardData(){
       gs => [B("Total"), N(tot(gs,"n","stock")), MS(tot(gs,"v","stock")), N(tot(gs,"n","bill")), MS(tot(gs,"v","bill")), N(tot(gs,"n","transit")), MS(tot(gs,"v","transit")), N(gs.reduce((t,g) => t + locationTotalCount(g), 0)), MS(gs.reduce((t,g) => t + locationTotalValue(g), 0))]);
     if(box("locationChart")){
       box("locationChart").innerHTML = allLocations.length
-        ? table(["Location","Total Count","Value"],
-          allLocations.map(g => [g.key, dimNum(locationTotalCount(g),"location",g.key,"stock-transit-bill"), moneyShort(locationTotalValue(g))]),
-          [B("Grand Total"), N(allLocations.reduce((n,g) => n + locationTotalCount(g), 0)), MS(allLocations.reduce((n,g) => n + locationTotalValue(g), 0))])
+        ? table(["Location","Free Stock","Free Stock Value","Tally Done","Tally Done Value","In Transit","In Transit Value","Total Count","Grand Total Value"],
+          allLocations.map(g => [g.key,
+            dimNum(g.n.stock,"location",g.key,"stock"),
+            moneyShort(g.v.stock),
+            dimNum(g.n.bill,"location",g.key,"bill"),
+            moneyShort(g.v.bill),
+            dimNum(g.n.transit,"location",g.key,"transit"),
+            moneyShort(g.v.transit),
+            dimNum(locationTotalCount(g),"location",g.key,"stock-transit-bill"),
+            moneyShort(locationTotalValue(g))]),
+          [B("Grand Total"),
+            N(allLocations.reduce((n,g) => n + g.n.stock, 0)),
+            MS(allLocations.reduce((n,g) => n + g.v.stock, 0)),
+            N(allLocations.reduce((n,g) => n + g.n.bill, 0)),
+            MS(allLocations.reduce((n,g) => n + g.v.bill, 0)),
+            N(allLocations.reduce((n,g) => n + g.n.transit, 0)),
+            MS(allLocations.reduce((n,g) => n + g.v.transit, 0)),
+            N(allLocations.reduce((n,g) => n + locationTotalCount(g), 0)),
+            MS(allLocations.reduce((n,g) => n + locationTotalValue(g), 0))])
         : emptyState("No location stock found.");
       bindDim(box("locationChart"));
     }
@@ -225,10 +258,18 @@ async function loadDashboardData(){
     // Ageing = Free Stock only (In Transit, Tally Done, Pending Order and Delivered are not aged)
     const ageRows = ageInfo(all), names = ageBucketNames(), buckets = [...names, ...(ageRows.some(a => a.b === AGE_NODATE) ? [AGE_NODATE] : [])];
     const nf = x => Number(x).toLocaleString("en-IN");
+    const ageTotalValue = ageRows.reduce((t, a) => t + vAmt(a.v), 0);
     if(box("ageNote")) box("ageNote").textContent = `Ageing is calculated on Free Stock only: ${nf(ageRows.length)} vehicles.`;
     if(box("ageDash")){
-      box("ageDash").innerHTML = ageRows.length ? buckets.map(bk => { const l = ageRows.filter(a => a.b === bk);
-        return `<button type="button" class="stat-card stat-card-button age-card" data-age-b="${esc(bk)}"><div class="stat-title">${esc(bk)}</div><div class="stat-value">${l.length.toLocaleString("en-IN")}</div><div class="stat-note">${moneyShort(l.reduce((t,a) => t + vAmt(a.v), 0))}</div></button>`; }).join("")
+      const cards = [...buckets.map(bk => {
+        const l = ageRows.filter(a => a.b === bk);
+        return {label: bk, bucket: bk, count: l.length, value: l.reduce((t, a) => t + vAmt(a.v), 0)};
+      }), {label:"Total Free Stock", bucket:"Total", count: ageRows.length, value: ageTotalValue}];
+      box("ageDash").innerHTML = ageRows.length ? cards.map((card, index) => {
+        const isTotal = card.bucket === "Total";
+        const bucketTone = isTotal ? "age-total-card" : `age-bucket-${index % 4 + 1}`;
+        return `<button type="button" class="stat-card stat-card-button age-card ${bucketTone}" data-age-b="${esc(card.bucket)}"><div class="stat-title">${esc(card.label)}</div><div class="stat-value">${card.count.toLocaleString("en-IN")}</div><div class="stat-note">${moneyShort(card.value)}</div></button>`;
+      }).join("")
         : emptyState("No free stock yet. Vehicles appear here after Bhilarwadi / Branch IN.");
       box("ageDash").querySelectorAll("[data-age-b]").forEach(b => b.addEventListener("click", () => openAgeModal(null, b.dataset.ageB)));
     }
@@ -240,11 +281,11 @@ async function loadDashboardData(){
       const modelValue = g => g.v.stock + g.v.transit + g.v.pending + g.v.bill;
       const models = stageGroup(all, DIMS.model.of).filter(g => modelCount(g))
         .sort((a,b) => modelCount(b) - modelCount(a));
+      const maxModelCount = Math.max(1, ...models.map(modelCount));
       box("modelStockDash").innerHTML = models.length
-        ? table(["Model","Total Count","Value"], models.map(g => [g.key, N(modelCount(g)), moneyShort(modelValue(g))]),
-          [B("Grand Total"), N(models.reduce((n,g) => n + modelCount(g), 0)), MS(models.reduce((n,g) => n + modelValue(g), 0))])
+        ? `<div class="model-chart-scroll"><div class="dashboard-bar-chart dashboard-model-chart" role="list">${models.map(g => `<button type="button" class="dashboard-bar-item" data-model-stock="${esc(g.key)}" title="${esc(g.key)}: ${nf(modelCount(g))} vehicles · ${esc(moneyShort(modelValue(g)))}" aria-label="${esc(g.key)}: ${nf(modelCount(g))} vehicles, ${esc(moneyShort(modelValue(g)))}"><b>${nf(modelCount(g))}</b><span class="dashboard-bar-track"><i style="height:${Math.max(4, modelCount(g) / maxModelCount * 100)}%"></i></span><span class="model-chart-name">${esc(g.key)}</span><small>${esc(moneyShort(modelValue(g)))}</small></button>`).join("")}</div></div><div class="model-chart-total"><b>Grand Total</b><b>${nf(models.reduce((n,g) => n + modelCount(g), 0))} vehicles</b><b>${esc(moneyShort(models.reduce((n,g) => n + modelValue(g), 0)))}</b></div>`
         : emptyState("No model stock found.");
-      bindDim(box("modelStockDash"));
+      box("modelStockDash").querySelectorAll("[data-model-stock]").forEach(b => b.addEventListener("click", () => openModelStockModal(b.dataset.modelStock)));
     }
     if(box("modelDash")){
       const bCell = (m, bk) => { const o = ageBy[m]?.[bk]; return `<td class="num"><div class="age-cell">${o ? `<button type="button" class="link-num" data-age-m="${esc(m)}" data-age-b="${esc(bk)}">${nf(o.n)}</button><span>${moneyShort(o.v)}</span>` : `<span>0</span><span>-</span>`}</div></td>`; };
@@ -261,16 +302,20 @@ async function loadDashboardData(){
     const day = String(r.movement_time || "").slice(0,10), loc = r.to_location || r.from_location || "";
     return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || loc === f.location);
   });
-  if(box("stat7")) box("stat7").textContent = "0";
-  if(box("stat7v")) box("stat7v").textContent = moneyShort(0);
-  if(box("arrivingTable")) box("arrivingTable").innerHTML = emptyState("No vehicles are awaiting arrival.");
+  const arriving = awaitingArrivalRows(allMovements).filter(r => {
+    const day = String(r.movement_time || "").slice(0,10);
+    return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || [r.in_location,r.out_location].includes(f.location));
+  });
+  const arrivingValue = arriving.reduce((sum, r) => sum + Number(r.stock_value || 0), 0);
+  if(box("stat7")) box("stat7").textContent = arriving.length.toLocaleString("en-IN");
+  if(box("stat7v")) box("stat7v").textContent = moneyShort(arrivingValue);
+  if(box("arrivingTable")) box("arrivingTable").innerHTML = arriving.length
+    ? table(REPORTS["arriving-report"].cols.map(c => c.h), arriving.map(r => [fmtDT(r.movement_time), r.vin || "-", r.model || "-", statusBadge(r.status), r.in_location, r.out_location, r.gate_name || "-"]))
+    : emptyState("No vehicles are awaiting arrival.");
   if(box("gateTable")) box("gateTable").innerHTML = gate.error ? emptyState("Could not load: " + (gate.error.message || gate.error)) :
-    table(["Date & Time","Type","VIN No.","From","To","Status"], movements.slice(0, rows).map(r => {
-      const type = String(r.movement_type || "").toUpperCase();
-      const movementBadge = ["IN","OUT"].includes(type)
-        ? raw(`<span class="badge dashboard-movement-${type.toLowerCase()}">${type}</span>`)
-        : esc(r.movement_type || "-");
-      return [fmtDT(r.movement_time), movementBadge, r.vin, r.from_location, r.to_location, movementBadge];
+    table(["Date & Time","Chassis No.","Model","Type","From","To","Status"], movements.slice(0, rows).map(r => {
+      const statusText = r.status || (r.to_location ? "In Transit" : "-");
+      return [fmtDT(r.movement_time), r.vin || "-", r.model || "-", movementTypeBadge(r.movement_type), r.from_location || "-", r.to_location || "-", statusBadge(statusText)];
     }));
 }
 
@@ -283,14 +328,16 @@ function ageInfo(all){      // Free Stock only (In Transit, Tally Done, Delivere
 const vRow = v => ({...v, location_name:vLocName(v), aging_days:daysSince(v.purchase_date ?? v.hmi_invoice_date), delivery_no_c:v.delivery_no || v.grn_no});
 const DASH_PURCHASE_KEYS = ["main_dealer","dealer_code","hmi_invoice_date","hmi_invoice_no","excise_invoice_no","order_date","order_no","model","variant","color","vin","fsc","variant_code","engine_no","finance_company","departure_date","lot_number","transporter_name","transporter_vehicle_no","basic_price","freight_insurance","total_invoice_value","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","hmi_invoice_amount","hsn_code","emission_type","quantity","grn_no","grn_date","sale_tax","fob_key"];
 const DASH_PURCHASE_COLS = DASH_PURCHASE_KEYS.map(k => col(FIELD_HEADING[k],k,FIELD_TYPE[k]));
+const VEHICLE_STOCK_COLS = [...DASH_PURCHASE_COLS, col("Status","status"), col("Location","location_name"), col("Order Status","order_status"), col("Stock Value","stock_value","money")];
 const DASH_SALES_COLS = [col("Tally Invoice Date","bill_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Tally Location","sales_location"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Total Invoice value","total_invoice_value","money")];
 const DASH_ORDER_COLS = [col("Order Date","order_date","date"),col("Order No","order_no"),col("PIS No","pis_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Order Amount","order_amount","money"),col("Order Type","order_type"),col("Assigned Date","assigned_date","date"),col("Confirm Date","confirm_date","date"),col("VIN No.","vin"),col("Order Status","order_status"),col("Customer ID","customer_id"),col("Customer Name","customer_name")];
 const DASH_TOTAL_COLS = [...DASH_PURCHASE_COLS, ...DASH_SALES_COLS.filter(c => !DASH_PURCHASE_KEYS.includes(c.k))];
 const hasSalesReportData = v => !!(v.sales_imported_at || v.bill_date || v.bill_no || v.sales_location);
 function dashboardModalCols(kind, rows){
   if(kind === "pending") return DASH_ORDER_COLS;
+  if(kind === "bill") return DASH_SALES_COLS;
   const hasSales = rows.some(hasSalesReportData);
-  if(["bill","delivered"].includes(kind)) return hasSales ? DASH_SALES_COLS : DASH_PURCHASE_COLS;
+  if(kind === "delivered") return hasSales ? DASH_SALES_COLS : DASH_PURCHASE_COLS;
   if(["total","stock-bill","all"].includes(kind) && hasSales) return DASH_TOTAL_COLS;
   return DASH_PURCHASE_COLS;
 }
@@ -301,7 +348,8 @@ function currentStatusColumns(rows, selectedStatus){
     const stageRows = rows.filter(v => vStage(v) === stage);
     if(["pending","cancelled"].includes(stage)) groups.push(DASH_ORDER_COLS);
     else if(["stock","transit"].includes(stage)) groups.push(DASH_PURCHASE_COLS);
-    else if(["bill","delivered"].includes(stage)){
+    else if(stage === "bill") groups.push(DASH_SALES_COLS);
+    else if(stage === "delivered"){
       const withSales = stageRows.some(hasSalesReportData), withoutSales = stageRows.some(v => !hasSalesReportData(v));
       if(withSales) groups.push(DASH_SALES_COLS);
       if(withoutSales || !withSales) groups.push(DASH_PURCHASE_COLS);
@@ -323,7 +371,12 @@ async function openStatModal(kind){
   if(!state.supabase){ toast("Connect Supabase first.","error"); return; }
   try {
     if(kind === "arriving"){
-      openVehicleModal("Arriving Vehicles — OUT, awaiting IN", [],
+      const f = dashboardFilters();
+      const rows = (await computedRows("awaiting_arrival_report")).filter(r => {
+        const day = String(r.movement_time || "").slice(0,10);
+        return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || [r.in_location,r.out_location].includes(f.location));
+      }).map(({id, ...row}) => row);
+      openVehicleModal("Arriving Vehicles — OUT, awaiting IN", rows,
         [col("OUT Date","movement_time","datetime"),col("VIN","vin"),col("Model","model"),col("Stock Status","status"),col("IN Location","in_location"),col("OUT Location","out_location"),col("Value","stock_value","money")],
         "arriving", [], () => openStatModal("arriving"));
       return;
@@ -333,6 +386,13 @@ async function openStatModal(kind){
     // Total Order Stock window: stage-wise breakdown so the totals reconcile (order → delivery)
     const chips = kind === "total" ? STAGES.filter(([k]) => k !== "delivered").map(([k,label]) => { const l = rows.filter(r => vStage(r) === k); return `<span class="dm-chip dm-stage">${label}: <b>${l.length.toLocaleString("en-IN")}</b> · ${moneyShort(l.reduce((t,r) => t + vAmt(r), 0))}</span>`; }) : [];
     openVehicleModal(def.title, rows, dashboardModalCols(kind,rows), kind, chips, () => openStatModal(kind));
+  } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
+}
+async function openModelStockModal(model){
+  try {
+    const all = await allVehicles(); await getLocations();
+    const rows = all.filter(v => DIMS.model.of(v) === model && !["delivered","cancelled"].includes(vStage(v)) && dashboardMatchesVehicle(v)).map(vRow);
+    openVehicleModal(`Model: ${model} — Stock`, rows, DASH_PURCHASE_COLS, "model-stock", [], () => openModelStockModal(model));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
 const STAGE_TITLE = {stock:"Free Stock", transit:"In Transit", bill:"Tally Done", "stock-bill":"Free Stock + Tally Done", "stock-transit-bill":"Free Stock + In Transit + Tally Done", delivered:"Delivered", pending:"Pending Order", all:"All vehicles"};
@@ -347,7 +407,10 @@ async function openDimModal(dim, key, stage){          // click on a count in a 
 async function openAgeModal(model, bucket){
   try {
     const all = await allVehicles(); await getLocations();
-    const rows = ageInfo(all).filter(a => a.b === bucket && (model === null || (a.v.model || "Not Available") === model)).map(a => vRow(a.v));
+    const ageRows = ageInfo(all);
+    const rows = (bucket === "Total"
+      ? ageRows.filter(model === null ? () => true : a => (a.v.model || "Not Available") === model)
+      : ageRows.filter(a => a.b === bucket && (model === null || (a.v.model || "Not Available") === model))).map(a => vRow(a.v));
     openVehicleModal(`${model === null ? "All models" : model} — Ageing ${bucket}`, rows, DASH_PURCHASE_COLS, "ageing", [], () => openAgeModal(model, bucket));
   } catch(err){ toast("Could not load: " + (err.message || err), "error"); }
 }
@@ -362,8 +425,8 @@ function openVehicleModal(title, rows, cols, fileKey, chips = [], reopen = null)
   const shown = () => { const q = ($("dmFilter").value || "").trim().toLowerCase(), stage = $("dmStageFilter")?.value || "";
     return rows.filter(r => (!stage || vStage(r) === stage) && (!q || cols.some(c => String(fmtCell(c.t === "days" ? "num" : c.t, r[c.k]) ?? "").toLowerCase().includes(q)))); };
   const draw = () => {
-    const list = shown(), tot = c => list.reduce((t, r) => t + Number(r[c.k] || 0), 0);
-    $("dmSummary").innerHTML = `<span class="dm-chip"><b>${list.length.toLocaleString("en-IN")}</b> vehicles</span>` + sums.map(c => `<span class="dm-chip">${esc(c.h)}: <b>${money(tot(c))}</b></span>`).join("") + (list.length === rows.length ? chips.join("") : "");
+    const list = shown(), tot = c => list.reduce((t, r) => t + Number(r[c.k] || 0), 0), totalValue = list.reduce((t, r) => t + Number(vValue(r) || 0), 0);
+    $("dmSummary").innerHTML = `<span class="dm-chip"><b>${list.length.toLocaleString("en-IN")}</b> vehicles</span><span class="dm-chip">Total Value: <b>${money(totalValue)}</b></span>` + (list.length === rows.length ? chips.join("") : "");
     const footer = list.length ? cols.map((c,i) => i === 0 ? raw(`<b>Total (${list.length.toLocaleString("en-IN")})</b>`) : c.t === "money" ? raw(`<b>${money(tot(c))}</b>`) : "") : null;
     mountPaged($("dmTable"), {headers:[...cols.map(c => c.h), ...(canEdit ? [""] : [])], footer: footer && canEdit ? [...footer, ""] : footer,
       rows:list.map(r => [...cols.map(c => c.k === "status" ? statusBadge(r[c.k]) : fmtCell(c.t === "days" ? "num" : c.t, r[c.k])), ...(canEdit ? [raw(`<button type="button" class="table-icon-btn" data-dmedit="${esc(r.id)}" title="Edit">✎ Edit</button>`)] : [])]),
@@ -389,9 +452,9 @@ async function renderVehicles(page){
   const useStatusButtons = ["status","vehicles"].includes(page);
   $("content").innerHTML = `
   <div class="toolbar">
-    <div class="searchbox${page === "search" ? " vehicle-searchbox" : ""}">
+    <div class="searchbox${["search","vehicles"].includes(page) ? " vehicle-searchbox" : ""}">
       <input id="vehicleSearch" placeholder="Search VIN / order no / engine / model / color" autocomplete="off" aria-label="Search vehicles">
-      ${page === "search" ? `<button type="button" id="vehicleScan" class="secondary-btn" title="Scan VIN / chassis barcode">📷 Scan</button>` : ""}
+      ${["search","vehicles"].includes(page) ? `<button type="button" id="vehicleScan" class="secondary-btn" title="Scan VIN / chassis barcode"><span class="vehicle-scan-icon" aria-hidden="true">📷</span><span>Scan</span></button>` : ""}
       <button type="button" id="vehicleSearchBtn">Search</button>
     </div>
     <div class="toolbar-actions">${useStatusButtons ? "" : filterBtn("vehFilter")}<button class="secondary-btn" type="button" id="vehicleExport">⤓ Export</button></div>
@@ -441,9 +504,11 @@ async function queryVehicles(){
   VEH.rows = data || []; VEH.total = count ?? VEH.rows.length;
   if(!$("vehicleResults")) return;                       // user already moved to another page
   const actions = v => raw(`<button type="button" class="table-icon-btn" data-vid="${esc(v.id)}">Details</button>` + (state.isAdmin ? `<button type="button" class="table-icon-btn" data-vedit="${esc(v.id)}" title="Edit">✎</button><button type="button" class="table-icon-btn danger" data-vdel="${esc(v.id)}" title="Delete">🗑</button>` : ""));
-  if(VEH.pageType === "status"){
+  if(VEH.pageType === "status" || (VEH.pageType === "vehicles" && VEH.status && vStage({status:VEH.status}) === "bill")){
     const cols = currentStatusColumns(VEH.rows, VEH.status);
     box.innerHTML = table([...cols.map(c => c.h), ""], VEH.rows.map(v => [...cols.map(c => c.k === "status" ? statusBadge(v.status) : fmtCell(c.t, c.k === "location_name" ? vLocName(v) : v[c.k])), actions(v)]));
+  } else if(VEH.pageType === "vehicles"){
+    box.innerHTML = table([...VEHICLE_STOCK_COLS.map(c => c.h), ""], VEH.rows.map(v => [...VEHICLE_STOCK_COLS.map(c => c.k === "status" ? statusBadge(v.status) : fmtCell(c.t, c.k === "location_name" ? vLocName(v) : v[c.k])), actions(v)]));
   } else {
     box.innerHTML = table(["Order No","VIN No.","Engine No","Model","Variant","Color","Dealer","Financier Name","HMI Invoice Date","Status","Location","Order Status","Stock Value",""],
       VEH.rows.map(v => [v.order_no, raw(`<b class="mono">${esc(v.vin)}</b>`), v.engine_no, v.model, v.variant, v.color, v.dealer_code, v.finance_company, fmtD(v.hmi_invoice_date ?? v.purchase_date), statusBadge(v.status), vLocName(v), v.order_status, money(v.stock_value), actions(v)]));
@@ -477,7 +542,7 @@ function showVehicleDetails(id){
 function renderTimeline(){
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Vehicle Timeline</h3>
     <div class="searchbox"><input id="timelineVin" placeholder="Enter VIN (or last 6 digits)" autocomplete="off" aria-label="VIN"><button type="button" id="timelineBtn">Search</button></div></div>
-    <div id="timelineResults">${emptyState("Search a VIN to view its read-only timeline.")}</div>
+    <div id="timelineResults"></div>
     <section class="timeline-recent"><h3>Recent Vehicle IN</h3><div id="timelineRecentList" class="table-wrap">${emptyState("Loading recent vehicle IN entries...")}</div></section></div>`;
   $("timelineBtn").addEventListener("click", loadTimeline);
   $("timelineVin").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); loadTimeline(); } });
@@ -616,7 +681,7 @@ function drawReport(){
   if(def.totals && rows.length) footer = def.cols.map((c,i) => i === 0 ? raw("<b>Total</b>") : (c.t === "num" || c.t === "money")
     ? raw(`<b>${fmtCell(c.t, rows.reduce((s,r) => s + Number(r[c.k] || 0), 0))}</b>`) : "");
   if(edit && footer) footer = [...footer, ""];
-  const cellOf = (c, r) => (def.dim && REPORT_STAGE[c.k] && Number(r[c.k]) > 0) ? dimNum(r[c.k], def.dim, r.key, REPORT_STAGE[c.k]) : fmtCell(c.t, r[c.k]);
+  const cellOf = (c, r) => (def.dim && REPORT_STAGE[c.k] && Number(r[c.k]) > 0) ? dimNum(r[c.k], def.dim, r.key, REPORT_STAGE[c.k]) : c.k === "status" ? statusBadge(r[c.k]) : c.k === "movement_type" ? movementTypeBadge(r[c.k]) : fmtCell(c.t, r[c.k]);
   mountPaged($("reportTable"), {headers:[...def.cols.map(c => c.h), ...(edit ? [""] : [])],
     rows:rows.map(r => [...def.cols.map(c => cellOf(c, r)), ...(edit ? [raw(r.id || r.vehicle_id ? `<button type="button" class="table-icon-btn" data-redit="${esc(r.id || r.vehicle_id)}" title="Edit">✎ Edit</button>` : "")] : [])]), footer,
     onDraw:el => {
@@ -639,7 +704,7 @@ async function renderReport(page){
     <div class="report-tools">${filterBtn("repFilter")}<button class="secondary-btn" type="button" id="reportExport">⤓ Export</button></div></div>
     ${filterPanel("repFilter", `<div class="filter-grid"><label>Search rows<input id="reportFilter" type="search" placeholder="Type to filter…" aria-label="Filter rows"></label></div>`)}
     <p id="reportMeta" class="form-help"></p>
-    <div class="table-wrap${page === "finance-report" ? " finance-report-table" : ""}" id="reportTable">${emptyState("Loading live report...")}</div></div>`;
+    <div class="table-wrap${page === "finance-report" ? " finance-report-table" : page === "location-report" ? " location-report-table" : ""}" id="reportTable">${emptyState("Loading live report...")}</div></div>`;
   $("reportFilter").addEventListener("input", drawReport);
   $("reportExport").addEventListener("click", () => {
     const rows = reportRows(def, REPORT.rows, $("reportFilter").value);
@@ -663,7 +728,9 @@ async function loadReport(page){
     if(def.dim === "location") rows.sort((a,b) => compareLocationNames(a.location_name,b.location_name));
     else if(def.sort){ const [k,dir] = def.sort; rows.sort((a,b) => { const x = a[k], y = b[k];
       const c = (typeof x === "number" && typeof y === "number") ? x - y : String(x ?? "").localeCompare(String(y ?? "")); return dir === "desc" ? -c : c; }); }
-    REPORT.rows = rows;
+    REPORT.rows = page === "gate-report"
+      ? rows.map(r => ({...r, model:r.model || "-", status:r.status || (r.to_location ? "In Transit" : "-")}))
+      : rows;
     drawReport();
   } catch(err){ $("reportTable").innerHTML = emptyState(err.message); }
 }

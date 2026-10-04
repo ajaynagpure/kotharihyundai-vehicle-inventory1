@@ -7,8 +7,19 @@
 const IMPORT_TYPES = {
   "order-import":    {key:"ORDER",    status:"Pending Order", title:"Order Report Import"},
   "purchase-import": {key:"PURCHASE", status:"In Transit",    title:"Purchase Report Import"},
-  "sales-import":    {key:"SALES",    status:"Tally Done", title:"Sales Report Import"}
+  "sales-import":    {key:"SALES",    status:"Tally Done", title:"Sales Report Import"},
+  "delivery-import": {key:"DELIVERY", status:"Delivered", title:"Delivery Report Import"}
 };
+const IMPORT_COLUMNS = {
+  ORDER:["order_date","order_no","pis_no","model","variant","color","order_amount","order_type","assigned_date","confirm_date","vin","order_status","customer_id","customer_name"],
+  PURCHASE:["main_dealer","dealer_code","hmi_invoice_date","hmi_invoice_no","excise_invoice_no","order_date","order_no","model","variant","color","vin","fsc","variant_code","engine_no","finance_company","departure_date","lot_number","transporter_name","transporter_vehicle_no","basic_price","freight_insurance","total_invoice_value","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","hmi_invoice_amount","hsn_code","emission_type","quantity","grn_no","grn_date","sale_tax","fob_key"],
+  SALES:["bill_date","vin","engine_no","customer_name","bill_no","sales_location","model","variant","color","total_invoice_value"],
+  DELIVERY:["main_dealer","dealer_code","excise_invoice_no","hmi_invoice_no","order_date","order_no","hmi_invoice_date","hmi_invoice_amount","bhilarwadi_in_date","model","variant","color","vin","basic_price","freight_insurance","total_invoice_value","gst","comp_cess","engine_no","finance_company","delivery_date","delivery_location","bill_date","bill_no","customer_name"]
+};
+const DELIVERY_COLUMN_LABELS = Object.fromEntries(IMPORT_COLUMNS.DELIVERY.map(k => [k,
+  k === "bhilarwadi_in_date" ? "BHILARWADI VEHICLE IN DT" : k === "gst" ? "GST" : k === "delivery_location" ? FIELD_HEADING.sales_location : FIELD_HEADING[k]
+]));
+let importHubPage = "";
 const STATUS_MOVABLE = ["", "pending order", "in transit", "cancelled order"];   // purchase import never pulls later stages back
 const SQL_HINT = "Database columns are missing. Run IMPORT_COLUMNS_FIX.sql once in Supabase SQL Editor, then import again.";
 let importRows = [];
@@ -17,7 +28,12 @@ const importDropped = new Set();                              // columns the dat
 function importNorm(h){ return String(h ?? "").toLowerCase().replace(/%/g," pct ").replace(/[^a-z0-9]+/g," ").trim(); }
 const IMPORT_HEADER_MAP = (() => {                            // normalised Excel header -> [db column, type]
   const m = new Map();
-  EXCEL_FIELDS.forEach(([k, heading, type, extra = []]) => [heading, ...extra].forEach(a => { if(!m.has(importNorm(a))) m.set(importNorm(a), [k, type]); }));
+  [...EXCEL_FIELDS, ...DERIVED_FIELDS].forEach(([k, heading, type, extra = []]) => [heading, ...extra].forEach(a => { if(!m.has(importNorm(a))) m.set(importNorm(a), [k, type]); }));
+  m.set(importNorm("GST"), ["gst", "money"]);
+  m.set(importNorm("BHILARWADI VEHICLE IN DT"), ["bhilarwadi_in_date", "date"]);
+  m.set(importNorm("HMI INV. DATE"), ["hmi_invoice_date", "date"]);
+  m.set(importNorm("HMI INV AMOUNT"), ["hmi_invoice_amount", "money"]);
+  m.set(importNorm("Customer's Name"), ["customer_name", "text"]);
   return m;
 })();
 function importDate(v){
@@ -94,7 +110,7 @@ async function importFetchExisting(rows){
   const sb = state.supabase, byOrder = new Map(), byVin = new Map();
   const load = async (col, values) => {
     for(const part of importChunks([...new Set(values)], 80)){
-      const {data, error} = await sb.from("vehicles").select("id,vin,order_no,status,engine_no,model,variant,color,customer_name,hmi_invoice_no,hmi_invoice_date,purchase_date,total_invoice_value,hmi_invoice_amount").in(col, part);
+      const {data, error} = await sb.from("vehicles").select("id,vin,order_no,status,main_dealer,dealer_code,excise_invoice_no,order_date,engine_no,model,variant,color,customer_name,hmi_invoice_no,hmi_invoice_date,purchase_date,basic_price,freight_insurance,total_invoice_value,hmi_invoice_amount,igst,cgst,sgst,comp_cess,finance_company,bill_date,bill_no,sales_location").in(col, part);
       if(error) throw error;
       (data || []).forEach(v => { if(v.order_no) byOrder.set(v.order_no, v); if(v.vin) byVin.set(v.vin, v); });
     }
@@ -103,19 +119,99 @@ async function importFetchExisting(rows){
   await load("vin", rows.map(r => r.vin).filter(Boolean));
   return {byOrder, byVin};
 }
+async function importFetchBhilarwadiInDates(rows){
+  const dates = new Map(), vins = [...new Set(rows.map(r => r.vin).filter(Boolean))];
+  for(const part of importChunks(vins, 80)){
+    const result = await state.supabase.from("gate_movements").select("vin,receipt_dt,created_at")
+      .eq("gate_name","Bhilarwadi").eq("movement_type","IN").in("vin",part).order("created_at",{ascending:false});
+    if(result.error) throw result.error;
+    (result.data || []).forEach(row => { if(row.vin && !dates.has(row.vin)) dates.set(row.vin, row.receipt_dt || row.created_at || ""); });
+  }
+  return dates;
+}
 const importFind = (ex, r) => (r.order_no && ex.byOrder.get(r.order_no)) || (r.vin && ex.byVin.get(r.vin)) || null;
 
 async function renderImport(page){
   if(page === "import-history") return renderImportHistory();
   if(page === "import-data") return renderImportedData();
+  if(page === "data-import"){
+    const available = Object.entries(IMPORT_TYPES).filter(([id]) => can(id));
+    if(can("manual-purchase")) available.splice(available.findIndex(([id]) => id === "purchase-import") + 1, 0, ["manual-purchase", {title:"Manual Purchase Entry"}]);
+    if(!available.length) return renderDenied();
+    const active = available.some(([id]) => id === importHubPage) ? importHubPage : available[0][0];
+    importHubPage = active;
+    $("content").innerHTML = `<div class="import-hub"><div class="tabs" id="importTypeTabs">${available.map(([id,t]) => `<button type="button" class="tab-btn${id === active ? " active" : ""}" data-import-type="${id}">${esc(t.title)}</button>`).join("")}</div><div id="importTypeContent"></div></div>`;
+    $("importTypeTabs").querySelectorAll("[data-import-type]").forEach(button => button.addEventListener("click", async () => {
+      importHubPage = button.dataset.importType;
+      $("importTypeTabs").querySelectorAll(".tab-btn").forEach(tab => tab.classList.toggle("active", tab === button));
+      if(importHubPage === "manual-purchase") renderManualPurchaseEntry($("importTypeContent"));
+      else await renderImportForm(importHubPage, $("importTypeContent"));
+    }));
+    if(active === "manual-purchase") return renderManualPurchaseEntry($("importTypeContent"));
+    return renderImportForm(active, $("importTypeContent"));
+  }
+  if(page === "manual-purchase") return renderManualPurchaseEntry($("content"));
+  return renderImportForm(page, $("content"));
+}
+function renderManualPurchaseEntry(target){
+  if(!can("manual-purchase")){ renderDenied(); return; }
+  const groups = [
+    ["Hyundai Vehicle Details",["vin","model","variant","color","engine_no","hsn_code","quantity"]],
+    ["Invoice and Finance Details",["finance_company","hmi_invoice_no","hmi_invoice_date"]],
+    ["Purchase Values and Taxes",["basic_price","freight_insurance","total_invoice_value","hmi_invoice_amount","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","sale_tax"]],
+  ];
+  const manualLabels = {hmi_invoice_no:"Other Dealer Invoice No.",hmi_invoice_date:"Other Dealer Date"};
+  const blocked = state.settings?.imp?.PURCHASE === false;
+  const field = key => {
+    const type = FIELD_TYPE[key] || "text", inputType = type === "date" ? "date" : ["money","num"].includes(type) ? "number" : "text";
+    return `<div><label for="mp_${key}">${esc(manualLabels[key] || FIELD_HEADING[key])}</label><input id="mp_${key}" name="${key}" type="${inputType}" ${inputType === "number" ? 'step="any"' : ""} ${key === "vin" ? "required" : ""}></div>`;
+  };
+  target.innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>Manual Purchase Entry — Other Dealer</h3></div>
+    <p class="form-help">Enter the vehicle, invoice, finance and purchase value details. The vehicle is saved as In Transit; matching Pending Orders follow the existing Purchase Import rules.</p>
+    ${blocked ? `<p class="message error">Purchase import is turned off in Settings → Import Configuration.</p>` : ""}
+    <form id="manualPurchaseForm" class="form-grid">${groups.map(([title,keys]) => `<h4 class="full">${esc(title)}</h4>${keys.map(field).join("")}`).join("")}
+      <div id="manualPurchaseMessage" class="message full"></div><div class="full form-actions"><button class="primary-btn" type="submit" ${blocked ? "disabled" : ""}>Save Purchase Entry</button></div></form></div>`;
+  if(blocked) target.querySelectorAll("#manualPurchaseForm input").forEach(input => { input.disabled = true; });
+  $("manualPurchaseForm").addEventListener("submit", saveManualPurchaseEntry);
+}
+async function saveManualPurchaseEntry(event){
+  event.preventDefault();
+  if(!state.supabase) return toast("Connect Supabase first.","error");
+  const form = event.currentTarget, message = $("manualPurchaseMessage"), button = form.querySelector("button[type=submit]"), row = {};
+  for(const key of IMPORT_COLUMNS.PURCHASE){
+    const value = String(new FormData(form).get(key) || "").trim(); if(!value) continue;
+    const type = FIELD_TYPE[key] || "text";
+    row[key] = type === "date" ? importDate(value) : ["money","num"].includes(type) ? importNum(value) : value;
+  }
+  if(!row.vin) return toast("VIN No. is required.","error");
+  row.vin = String(row.vin).replace(/\s+/g,"").toUpperCase();
+  button.disabled = true; button.textContent = "Saving…"; message.textContent = "Saving Purchase Entry…"; message.className = "message full";
+  importDropped.clear();
+  try {
+    const result = await importRunRows("PURCHASE",[row]);
+    VCACHE.rows = null;
+    const text = `${result.added} vehicle added as In Transit, ${result.updated} existing vehicle updated, ${result.failed} failed.` + (result.firstError ? ` ${result.firstError}` : "");
+    message.textContent = text; message.className = `message full ${result.failed ? "error" : "success"}`;
+    if(result.added || result.updated){
+      try { await importWrite(b => state.supabase.from("import_batches").insert(b), {import_type:"PURCHASE",file_name:"Manual Purchase Entry",total_rows:1,successful_rows:result.added + result.updated,failed_rows:result.failed,status:result.failed ? "Partial" : "Completed"}); } catch {}
+      logAudit("MANUAL_PURCHASE_ENTRY","import","vehicle",row.vin,{vin:row.vin,added:result.added,updated:result.updated});
+      toast("Manual purchase entry saved.",result.failed ? "error" : "success"); form.reset();
+    } else toast(result.firstError || "Purchase entry was not saved.","error");
+  } catch(err){ message.textContent = importMissingColumn(err) ? SQL_HINT : err.message || "Manual purchase entry failed."; message.className = "message full error"; }
+  finally { button.disabled = false; button.textContent = "Save Purchase Entry"; }
+}
+async function renderImportForm(page, target){
   const t = IMPORT_TYPES[page]; importRows = [];
   const rule = {
     ORDER: "File: <b>SaleDealerOrderStatus.xlsx</b>. <b>Ordered / Allocated</b> rows are added as <b>Pending Order</b>; <b>Invoiced</b> rows can be added as <b>In Transit</b>. <b>Cancelled Order</b> rows are imported with a separate status and are not counted in Pending Order or stock.",
     PURCHASE: "File: <b>VehicleDeliveryStatusReport.xlsx</b>. Imported as <b>In Transit</b>. If the <b>Order No</b> (or VIN) exists as Pending Order it moves to In Transit. Free Stock / Delivered vehicles keep their status.",
-    SALES: "Columns: <b>Tally Invoice Date, Vin No., Engine No, Customer Name, Tally Invoice No, Tally Location, Model, Variant, Color, Total Invoice value</b>. Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b>. Matching VINs update their Sales details; Delivered vehicles stay Delivered. Rows whose VIN is not in the Purchase report are ignored."
+    SALES: "Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b>. Matching VINs update their Sales details; Delivered vehicles stay Delivered. Rows whose VIN is not in the Purchase report are ignored.",
+    DELIVERY: "Delivery rows match existing vehicles by VIN, save delivery details, and update matched vehicle status to <b>Delivered</b>. Rows without a matching vehicle or delivery date are skipped."
   }[t.key];
-  $("content").innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>${esc(t.title)}</h3></div>
-    <p class="form-help">${rule}</p>
+  const columnLabel = k => t.key === "DELIVERY" ? DELIVERY_COLUMN_LABELS[k] : FIELD_HEADING[k];
+  const columns = IMPORT_COLUMNS[t.key].map(columnLabel).join(", ");
+  target.innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>${esc(t.title)}</h3></div>
+    <p class="form-help"><b>Columns:</b> ${esc(columns)}</p><p class="form-help">${rule}</p>
     <div class="dropzone"><input id="fileInput" type="file" accept=".csv,.xlsx,.xls"><div><button class="secondary-btn" id="importPreview" type="button">Preview</button> <button class="primary-btn" id="importGo" type="button" disabled>Import</button></div></div>
     <div id="importMsg" class="message"></div><div id="importPreviewBox" class="table-wrap"></div></div>`;
   $("importPreview").addEventListener("click", () => importPreviewFile(page));
@@ -138,26 +234,37 @@ async function importPreviewFile(page){
     const cancelled = importRows.filter(importIsCancelled).length, inv = importRows.filter(r => !importIsCancelled(r) && importIsInvoiced(r)).length;
     info += ` ${importRows.length - cancelled - inv} → Pending Order, ${inv} Invoiced → In Transit, ${cancelled} Cancelled Order → separate status (not Pending Order).`;
   }
-  let ex = null;
+  let ex = null, deliveryInDates = new Map();
   try {
     ex = await importFetchExisting(importRows); const hit = importRows.filter(r => importFind(ex, r)).length;
+    if(t.key === "DELIVERY") deliveryInDates = await importFetchBhilarwadiInDates(importRows);
     if(t.key === "SALES"){ const ok = importRows.filter(r => importHasPurchase(ex.byVin.get(r.vin))).length; info += ` ${ok} VIN found in Purchase report → Sales details will update. ${importRows.length - ok} VIN not in Purchase report → will be IGNORED.`; }
+    else if(t.key === "DELIVERY"){ const matched = importRows.filter(r => ex.byVin.has(r.vin)).length; info += ` ${matched} VINs found in Vehicle Stock; ${importRows.length - matched} unmatched VINs will be ignored.`; }
     else info += t.key === "PURCHASE" ? ` ${hit} match existing stock, ${importRows.length - hit} new.` : ` ${hit} already in system.`;
   } catch(err){ info += " " + (importMissingColumn(err) ? SQL_HINT : "(Could not check existing stock: " + (err.message || err) + ")"); }
   if(bad) info += ` ${bad} rows have no ${t.key === "ORDER" ? "Order No" : "VIN"} and will be skipped.`;
   if(unmapped.length) info += ` Ignored columns: ${unmapped.join(", ")}.`;
   msg.textContent = info; msg.className = "message" + (bad ? " error" : " success");
-  const orderCols = ["order_date","order_no","pis_no","model","variant","color","order_amount","order_type","assigned_date","confirm_date","vin","order_status","customer_id","customer_name"];
-  const purchaseCols = ["main_dealer","dealer_code","hmi_invoice_date","hmi_invoice_no","excise_invoice_no","order_date","order_no","model","variant","color","vin","fsc","variant_code","engine_no","finance_company","departure_date","lot_number","transporter_name","transporter_vehicle_no","basic_price","freight_insurance","total_invoice_value","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","hmi_invoice_amount","hsn_code","emission_type","quantity","grn_no","grn_date","sale_tax","fob_key"];
-  const salesCols = ["bill_date","vin","engine_no","customer_name","bill_no","sales_location","model","variant","color","total_invoice_value"];
-  const shown = t.key === "SALES" ? salesCols : t.key === "PURCHASE" ? purchaseCols : orderCols;
-  const matchHead = t.key === "SALES" ? ["Purchase match","After import"] : [];
-  $("importPreviewBox").innerHTML = table([...shown.map(c => FIELD_HEADING[c]), ...matchHead], importRows.slice(0, t.key === "SALES" ? 50 : 15).map(r => [...shown.map(c => {
+  const orderCols = IMPORT_COLUMNS.ORDER, purchaseCols = IMPORT_COLUMNS.PURCHASE, salesCols = IMPORT_COLUMNS.SALES;
+  const shown = IMPORT_COLUMNS[t.key];
+  const matchHead = t.key === "SALES" ? ["Purchase match","After import"] : t.key === "DELIVERY" ? ["Vehicle match","After import"] : [];
+  $("importPreviewBox").innerHTML = table([...shown.map(columnLabel), ...matchHead], importRows.slice(0, t.key === "SALES" ? 50 : 15).map(r => [...shown.map(c => {
+    if(t.key === "DELIVERY"){
+      const vehicle = ex?.byVin.get(r.vin);
+      if(c === "bhilarwadi_in_date") return fmtD(deliveryInDates.get(r.vin));
+      if(c === "delivery_date") return fmtD(r.delivery_date);
+      if(c === "delivery_location") return vehicle?.sales_location || r.delivery_location || "-";
+      if(c === "bill_date") return fmtD(vehicle?.bill_date || r.bill_date);
+      if(c === "gst") return money(vehicle ? Number(vehicle.igst || 0) + Number(vehicle.cgst || 0) + Number(vehicle.sgst || 0) : r.gst);
+      if(vehicle && c !== "vin") return fmtCell(FIELD_TYPE[c] || "text", vehicle[c] ?? r[c]);
+      return fmtCell(FIELD_TYPE[c] || "text", r[c]);
+    }
     if(c === "stock_value") return r.hmi_invoice_amount ?? r.order_amount;
     if(t.key === "SALES" && !SALES_KEEP.includes(c)){ const p = ex?.byVin.get(r.vin); return p ? (c === "total_invoice_value" ? (p.total_invoice_value ?? p.hmi_invoice_amount) : p[c]) : ""; }   // fetched from Purchase report
     return r[c];
-  }), ...(t.key === "SALES" ? (() => { const p = ex?.byVin.get(r.vin), ok = importHasPurchase(p);
-      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (status kept)" : "Tally Done"]; })() : [])]));
+    }), ...(t.key === "SALES" ? (() => { const p = ex?.byVin.get(r.vin), ok = importHasPurchase(p);
+      return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (status kept)" : "Tally Done"]; })()
+      : t.key === "DELIVERY" ? (() => { const vehicle = ex?.byVin.get(r.vin), found = !!vehicle; return [!found ? "✗ VIN not found" : vStage(vehicle) !== "bill" ? "✗ Not in Tally Done" : "✓ Tally Done", !found ? "Ignored" : vStage(vehicle) !== "bill" ? "Delivery blocked" : r.delivery_date ? "Will mark Delivered" : "Missing delivery date"]; })() : [])]));
   $("importGo").disabled = !importRows.length;
 }
 async function importInsertRows(rows, res){
@@ -173,6 +280,51 @@ async function importInsertRows(rows, res){
 }
 async function importRunRows(key, rows){
   const sb = state.supabase, res = {added:0, updated:0, moved:0, skipped:0, deliveredUpdated:0, invoiced:0, cancelled:0, failed:0, ignored:0, firstError:""};
+  if(key === "DELIVERY"){
+    const ex = await importFetchExisting(rows), deliveryFields = ["delivery_date","customer_name","finance_company","delivery_location","engine_no","model","variant","color","bill_no"];
+    const vehicleIds = [...new Set(rows.map(r => ex.byVin.get(r.vin)?.id).filter(Boolean))], existingDeliveries = new Set();
+    for(const part of importChunks(vehicleIds, 80)){
+      const found = await sb.from("deliveries").select("vehicle_id").in("vehicle_id", part);
+      if(found.error) throw found.error;
+      (found.data || []).forEach(row => existingDeliveries.add(String(row.vehicle_id)));
+    }
+    for(const r of rows){
+      if(!r.vin){ res.failed++; res.firstError ||= "VIN missing"; continue; }
+      const vehicle = ex.byVin.get(r.vin);
+      if(!vehicle){ res.ignored++; importIgnored.push(r.vin); continue; }
+      if(vStage(vehicle) !== "bill"){ res.failed++; res.firstError ||= `${r.vin}: Not in Tally Done. Delivery is blocked.`; continue; }
+      if(!r.delivery_date){ res.failed++; res.firstError ||= `Delivery Date missing for ${r.vin}`; continue; }
+      const hadDelivery = existingDeliveries.has(String(vehicle.id)), record = {vehicle_id:vehicle.id};
+      if(r.delivery_no) record.delivery_no = r.delivery_no;
+      const deliveryValues = {
+        delivery_date:r.delivery_date,
+        delivery_location:vehicle.sales_location || "",
+        customer_name:vehicle.customer_name || "",
+        bill_no:vehicle.bill_no || "",
+        finance_company:vehicle.finance_company || "",
+        engine_no:vehicle.engine_no || "",
+        model:vehicle.model || "",
+        variant:vehicle.variant || "",
+        color:vehicle.color || ""
+      };
+      deliveryFields.forEach(k => { if(deliveryValues[k] !== "") record[k] = deliveryValues[k]; });
+      const saveRecord = payload => hadDelivery
+        ? sb.from("deliveries").update(payload).eq("vehicle_id", vehicle.id).select("vehicle_id")
+        : sb.from("deliveries").insert(payload).select("vehicle_id");
+      let saved = await importWrite(saveRecord, record);
+      if(saved.error && !hadDelivery && /delivery_no/i.test(saved.error.message || "") && /null/i.test(saved.error.message || "")){
+        saved = await importWrite(saveRecord, {...record, delivery_no:vehicle.vin.slice(-8)});
+      }
+      if(saved.error || !saved.data?.length){ res.failed++; res.firstError ||= saved.error?.message || `Delivery record not saved for ${r.vin}`; continue; }
+      const vehiclePatch = {status:window.APP_CONFIG?.deliveredStatus || "Delivered"};
+      deliveryFields.forEach(k => { if(deliveryValues[k] !== "") vehiclePatch[k] = deliveryValues[k]; });
+      const updated = await importWrite(b => sb.from("vehicles").update(b).eq("id", vehicle.id).select("id"), vehiclePatch);
+      if(updated.error || !updated.data?.length){ res.failed++; res.firstError ||= updated.error?.message || `Vehicle status not updated for ${r.vin}`; continue; }
+      if(hadDelivery) res.updated++; else res.added++;
+      res.deliveredUpdated++;
+    }
+    return res;
+  }
   if(key === "SALES"){                                       // matched VIN -> Sales details; Delivered status stays Delivered
     const ex = await importFetchExisting(rows), now = new Date().toISOString();
     for(const r of rows.map(importSalesOnly)){
@@ -233,18 +385,20 @@ async function importRun(page){
   try { res = await importRunRows(t.key, importRows); }
   catch(err){ msg.textContent = importMissingColumn(err) ? SQL_HINT : "Import stopped: " + (err.message || err); msg.className = "message error"; $("importGo").disabled = false; return; }
   if(typeof VCACHE !== "undefined") VCACHE.rows = null;
-  const bits = [`${res.added} added`];
+  const bits = t.key === "DELIVERY" ? [] : [`${res.added} added`];
   if(t.key === "PURCHASE") bits.push(`${res.updated} updated (${res.moved} moved Pending Order → In Transit)`);
   if(t.key === "ORDER") bits.push(`${res.updated} existing filled`, `${res.invoiced} of the added rows were Invoiced (In Transit)`, `${res.cancelled} marked Cancelled Order (not Pending Order)`);
   if(t.key === "SALES") bits.push(`${res.updated} VIN details updated`, `${res.deliveredUpdated} Delivered status kept`, `${res.ignored} ignored (VIN not in Purchase report)`);
+  if(t.key === "DELIVERY") bits.push(`${res.added} delivery entries added`, `${res.updated} existing delivery entries updated`, `${res.deliveredUpdated} vehicles marked Delivered`, `${res.ignored} ignored (VIN not found)`);
   bits.push(`${res.failed} failed`);
   let text = bits.join(", ") + ".";
   if(res.firstError) text += ` First error: ${res.firstError}` + (importMissingColumn({message:res.firstError}) ? ` — ${SQL_HINT}` : "");
   if(importDropped.size) text += ` Not saved (no such column in database): ${[...importDropped].map(c => FIELD_HEADING[c] || c).join(", ")}. ${SQL_HINT}`;
-  if(t.key === "SALES" && res.ignored) text += ` Ignored VINs: ${importIgnored.slice(0, 10).join(", ")}${res.ignored > 10 ? " …" : ""}.`;
+  if(["SALES","DELIVERY"].includes(t.key) && res.ignored) text += ` Ignored VINs: ${importIgnored.slice(0, 10).join(", ")}${res.ignored > 10 ? " …" : ""}.`;
   msg.textContent = text; msg.className = "message " + (res.failed ? "error" : "success");
-  if(t.key === "SALES" && res.ignored){ const b = document.createElement("button"); b.type = "button"; b.className = "secondary-btn"; b.textContent = "⤓ Download ignored VINs"; b.style.marginLeft = "10px";
-    b.onclick = () => exportSheet("sales-ignored-vins", ["VIN No.","Reason"], importIgnored.map(v => [v, "VIN not in Purchase report"])); msg.appendChild(b); }
+  if(["SALES","DELIVERY"].includes(t.key) && res.ignored){ const b = document.createElement("button"); b.type = "button"; b.className = "secondary-btn"; b.textContent = "⤓ Download ignored VINs"; b.style.marginLeft = "10px";
+    const reason = t.key === "SALES" ? "VIN not in Purchase report" : "VIN not found in Vehicle Stock";
+    b.onclick = () => exportSheet(t.key.toLowerCase() + "-ignored-vins", ["VIN No.","Reason"], importIgnored.map(v => [v, reason])); msg.appendChild(b); }
   try {
     await importWrite(b => state.supabase.from("import_batches").insert(b), {import_type:t.key, file_name:$("fileInput").files[0]?.name || "", total_rows:importRows.length,
       successful_rows:res.added + res.updated, failed_rows:res.failed, status:res.failed ? "Partial" : "Completed"});
@@ -283,7 +437,9 @@ const IDATA_TABS = {
   PURCHASE:{label:"Purchase Data", test:v => !isBlank(v.hmi_invoice_no) || !isBlank(v.hmi_invoice_date) || !isBlank(v.purchase_date),
     cols:[col("VIN No.","vin"),col("Engine No","engine_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Dealer","dealer_code"),col("Financier Name","finance_company"),col("HMI Invoice No","hmi_invoice_no"),col("HMI Invoice Date","hmi_invoice_date","date"),col("Status","status"),col("HMI Invoice Amount","hmi_invoice_amount","money")]},
   SALES:{label:"Sales Data", test:v => ["bill","delivered"].includes(vStage(v)) || !isBlank(v.sales_imported_at),
-    cols:[col("Tally Invoice Date","bill_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Tally Location","sales_location"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Total Invoice value","total_invoice_value","money"),col("Status","status"),col("Delivery Date","delivery_date","date")]}
+    cols:[col("Tally Invoice Date","bill_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Tally Location","sales_location"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Total Invoice value","total_invoice_value","money"),col("Status","status"),col("Delivery Date","delivery_date","date")]},
+  DELIVERY:{label:"Delivery Data", test:v => !!v.delivery_record_id || !!v.delivery_date,
+    cols:[col("Delivery No","delivery_no"),col("Delivery Date","delivery_date","date"),col("Bhilarwadi Vehicle IN DT","bhilarwadi_in_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Financier Name","finance_company"),col("Tally Location","dloc")]}
 };
 const idataList = all => {
   const t = IDATA_TABS[IDATA.tab], q = IDATA.q.trim().toLowerCase();
@@ -291,12 +447,24 @@ const idataList = all => {
     .filter(v => !q || t.cols.some(c => String(fmtCell(c.t, v[c.k]) ?? "").toLowerCase().includes(q)));
 };
 async function renderImportedData(){
-  const all = await allVehicles(true); await getLocations();
+  if(IDATA.tab === "DELIVERY" && !can("delivery-entry")) IDATA.tab = "ORDER";
+  let all = await allVehicles(true); await getLocations();
+  if(IDATA.tab === "DELIVERY"){
+    const deliveries = await fetchAll(() => state.supabase.from("deliveries").select("*").order("created_at",{ascending:false}), {max:50000});
+    const deliveryByVehicle = new Map(deliveries.map(d => [String(d.vehicle_id),d]));
+    const receiptDates = await importFetchBhilarwadiInDates(all);
+    all = all.filter(v => deliveryByVehicle.has(String(v.id)) || !!v.delivery_date).map(v => {
+      const d = deliveryByVehicle.get(String(v.id)) || {};
+      return {...v,...d,id:v.id,delivery_record_id:d.id || null,bhilarwadi_in_date:receiptDates.get(v.vin) || "",
+        dloc:d.delivery_location || v.delivery_location || v.sales_location || (v.location_id ? locName(v.location_id) : "")};
+    });
+  }
   const t = IDATA_TABS[IDATA.tab], statuses = [...new Set(all.filter(t.test).map(v => v.status || "UNKNOWN"))].sort();
+  const tabs = Object.entries(IDATA_TABS).filter(([k]) => k !== "DELIVERY" || can("delivery-entry"));
   IDATA.sel = new Set();
   $("content").innerHTML = `<div class="panel"><div class="panel-head"><h3>Imported Data</h3></div>
-    <p class="form-help">Everything imported from the Order, Purchase and Sales reports. Filter, tick rows and delete many at once.</p>
-    <div class="tabs">${Object.entries(IDATA_TABS).map(([k, x]) => `<button type="button" class="tab-btn ${k === IDATA.tab ? "active" : ""}" data-itab="${k}">${x.label} (${all.filter(x.test).length.toLocaleString("en-IN")})</button>`).join("")}</div>
+    <p class="form-help">Review imported Order, Purchase, Sales and Delivery records. Filter, select, edit and export records here.</p>
+    <div class="tabs">${tabs.map(([k, x]) => `<button type="button" class="tab-btn ${k === IDATA.tab ? "active" : ""}" data-itab="${k}">${x.label} (${all.filter(x.test).length.toLocaleString("en-IN")})</button>`).join("")}</div>
     <div class="report-tools idata-tools">${filterBtn("idFilter")}
       <button class="secondary-btn" type="button" id="idAll">☑ Select all (filtered)</button><button class="secondary-btn" type="button" id="idNone">☐ Clear</button>
       <button class="secondary-btn" type="button" id="idExp">⤓ Export</button>
@@ -308,10 +476,15 @@ async function renderImportedData(){
   const info = () => { $("idInfo").textContent = `${idataList(all).length.toLocaleString("en-IN")} records · ${IDATA.sel.size.toLocaleString("en-IN")} selected`; };
   const draw = () => {
     const list = idataList(all); info();
-    mountPaged($("idList"), {headers:["✓", ...t.cols.map(c => c.h), ...(state.isAdmin ? ["Edit"] : [])], empty:"No imported records.",
-      rows:list.map(v => [raw(`<input type="checkbox" class="id-chk" data-id="${esc(v.id)}" ${IDATA.sel.has(String(v.id)) ? "checked" : ""} aria-label="Select">`), ...t.cols.map(c => c.k === "status" ? statusBadge(v[c.k]) : fmtCell(c.t, v[c.k])), ...(state.isAdmin ? [raw(`<button type="button" class="table-icon-btn" data-idedit="${esc(v.id)}" title="Edit">✎ Edit</button>`)] : [])]),
+    const canEditRows = state.isAdmin || (IDATA.tab === "DELIVERY" && can("delivery-entry"));
+    mountPaged($("idList"), {headers:["✓", ...t.cols.map(c => c.h), ...(canEditRows ? ["Edit"] : [])], empty:"No imported records.",
+      rows:list.map(v => [raw(`<input type="checkbox" class="id-chk" data-id="${esc(v.id)}" ${IDATA.sel.has(String(v.id)) ? "checked" : ""} aria-label="Select">`), ...t.cols.map(c => c.k === "status" ? statusBadge(v[c.k]) : fmtCell(c.t, v[c.k])), ...(canEditRows ? [raw(`<button type="button" class="table-icon-btn" data-idedit="${esc(v.id)}" title="Edit">✎ Edit</button>`)] : [])]),
       onDraw:el => { el.querySelectorAll(".id-chk").forEach(cb => cb.addEventListener("change", () => { cb.checked ? IDATA.sel.add(cb.dataset.id) : IDATA.sel.delete(cb.dataset.id); info(); }));
-        el.querySelectorAll("[data-idedit]").forEach(b => b.addEventListener("click", () => openVehicleEdit(all.find(x => String(x.id) === b.dataset.idedit), renderImportedData))); }});
+        el.querySelectorAll("[data-idedit]").forEach(b => b.addEventListener("click", () => {
+          const row = all.find(x => String(x.id) === b.dataset.idedit);
+          if(IDATA.tab === "DELIVERY"){ DEL.rows = all; delEdit(b.dataset.idedit, renderImportedData); }
+          else openVehicleEdit(row, renderImportedData);
+        })); }});
   };
   $("idSearch").addEventListener("input", e => { IDATA.q = e.target.value; draw(); });
   $("idStatus").addEventListener("change", e => { IDATA.status = e.target.value; draw(); });
@@ -322,10 +495,21 @@ async function renderImportedData(){
     exportSheet("imported-" + IDATA.tab.toLowerCase(), cols.map(c => c.h), l.map(r => cols.map(c => (c.t === "money" || c.t === "num") ? Number(r[c.k] || 0) : (r[c.k] ?? "")))); };
   $("idDel").onclick = async () => {
     const vs = all.filter(v => IDATA.sel.has(String(v.id))); if(!vs.length) return toast("Select rows first.","error");
+    if(IDATA.tab === "DELIVERY") return can("delivery-entry") ? removeImportedDeliveryEntries(vs) : toast("You do not have permission to edit delivery data.", "error");
     if(IDATA.tab === "SALES") return removeSalesEntries(vs);
     deleteVehicles(vs, renderImportedData);
   };
   draw();
+}
+async function removeImportedDeliveryEntries(vehicles){
+  if(!confirm(`Remove ${vehicles.length} selected delivery entr${vehicles.length === 1 ? "y" : "ies"}? Vehicle records will remain and their status will be restored.`)) return;
+  let removed = 0, failed = 0;
+  for(const vehicle of vehicles){
+    const result = await deleteDeliveryRecord(vehicle);
+    if(result.error) failed++; else removed++;
+  }
+  toast(`${removed} delivery entr${removed === 1 ? "y" : "ies"} removed${failed ? `, ${failed} failed` : ""}. Vehicle records were kept.`, failed ? "error" : "success");
+  renderImportedData();
 }
 async function removeSalesEntries(vs){
   const back = vs.filter(v => vStage(v) === "bill");               // delivered vehicles have a Delivery Entry: undo that from Delivery Entry / Data Management
