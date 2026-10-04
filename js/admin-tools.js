@@ -271,7 +271,8 @@ const DM_TABS = {
 const DM_RESETS = [
   {k:"order", title:"Reset Order data", desc:"Deletes all vehicles still at Pending Order or marked Cancelled Order.", count:a => a.filter(v => ["pending","cancelled"].includes(vStage(v))).length},
   {k:"purchase", title:"Reset Purchase data", desc:"Deletes all In Transit and Free Stock vehicles.", count:a => a.filter(v => ["transit","stock"].includes(vStage(v))).length},
-  {k:"sales", title:"Reset Sales data", desc:"Deletes all Tally Done and Delivered vehicles.", count:a => a.filter(v => ["bill","delivered"].includes(vStage(v))).length},
+  {k:"sales", title:"Reset Sales data", desc:"Deletes all Tally Done vehicles. Delivered vehicles are kept for Reset Delivery data.", count:a => a.filter(v => vStage(v) === "bill").length},
+  {k:"delivery", title:"Reset Delivery data", desc:"Removes delivery entries and returns delivered vehicles to their previous stock / Tally status. Vehicle records are kept.", count:a => a.filter(v => vStage(v) === "delivered" || !isBlank(v.delivery_date)).length},
   {k:"gate", title:"Reset Gate movements", desc:"Deletes every Bhilarwadi / Branch In-Out entry and its IN photos.", table:"gate_movements"},
   {k:"imports", title:"Clear Import History", desc:"Deletes the import log only (vehicles stay).", table:"import_batches"},
   {k:"all", title:"Reset ALL data", desc:"Deletes every vehicle, delivery, gate movement and import log. Users, roles, locations and settings are kept.", count:a => a.length, danger:true}
@@ -296,7 +297,7 @@ function drawDM(all){
 function openResetConfirm(x, all){
   const n = x.count ? x.count(all) : null;
   openModal(`<div class="modal-bg"><div class="modal" role="dialog" aria-modal="true"><div class="panel-head"><h3>${esc(x.title)}</h3><button class="icon-btn" type="button" id="modalClose">×</button></div>
-    <p>${esc(x.desc)}${n !== null ? ` <b>${n.toLocaleString("en-IN")} records</b> will be deleted.` : ""}</p><p class="form-help">This cannot be undone. Type <b>RESET</b> to continue.</p>
+    <p>${esc(x.desc)}${n !== null ? ` <b>${n.toLocaleString("en-IN")} records</b> will be affected.` : ""}</p><p class="form-help">This cannot be undone. Type <b>RESET</b> to continue.</p>
     <input id="resetText" autocomplete="off" placeholder="RESET"><div class="form-actions"><button type="button" class="secondary-btn" id="modalCancel">Cancel</button><button class="primary-btn danger-btn" type="button" id="resetGo" disabled>Delete permanently</button></div></div></div>`);
   $("modalClose").onclick = closeModal; $("modalCancel").onclick = closeModal;
   $("resetText").addEventListener("input", e => { $("resetGo").disabled = e.target.value.trim() !== "RESET"; });
@@ -322,7 +323,22 @@ async function runReset(x, all, progress){
   const byStage = stages => deleteVehicleIds(all.filter(v => stages.includes(vStage(v))).map(v => v.id), progress);
   if(x.k === "order") n = await byStage(["pending"]);
   else if(x.k === "purchase") n = await byStage(["transit","stock"]);
-  else if(x.k === "sales") n = await byStage(["bill","delivered"]);
+  else if(x.k === "sales") n = await byStage(["bill"]);
+  else if(x.k === "delivery"){
+    const deliveryRows = await state.supabase.from("deliveries").select("vehicle_id");
+    if(deliveryRows.error) throw new Error(`Could not read delivery entries: ${deliveryRows.error.message}${dbHint(deliveryRows.error)}`);
+    const deliveryVehicleIds = new Set((deliveryRows.data || []).map(row => String(row.vehicle_id)).filter(id => id !== "null" && id !== "undefined"));
+    const targets = all.filter(v => vStage(v) === "delivered" || !isBlank(v.delivery_date) || deliveryVehicleIds.has(String(v.id)));
+    let completed = 0;
+    for(const vehicle of targets){
+      const result = await deleteDeliveryRecord(vehicle);
+      if(result.error) throw new Error(`Delivery reset stopped after ${completed}/${targets.length} vehicles. VIN ${vehicle.vin || vehicle.id}: ${result.error}`);
+      completed++;
+      progress?.(completed, targets.length);
+    }
+    const orphaned = await wipeTable("deliveries");
+    n = completed + orphaned;
+  }
   else if(x.k === "gate") n = await wipeGate();
   else if(x.k === "imports") n = await wipeTable("import_batches");
   else if(x.k === "all"){

@@ -65,7 +65,7 @@ const EXCEL_FIELDS = [
   ["bill_amount","Total Bill Amount","money",["bill amount"]]
 ];
 // Not in the Excel files but kept on the vehicle record
-const DERIVED_FIELDS = [["delivery_no","Delivery No","text"],["delivery_date","Delivery Date","date"],["delivery_location","Delivery Location","text"],["chassis_no","Chassis No","text"],["stock_value","Stock Value","money"],["purchase_date","Purchase Date","date"],["status","Status","text"]];
+const DERIVED_FIELDS = [["delivery_no","Delivery No","text"],["delivery_date","Delivery Date","date"],["delivery_location","Delivery Location","text"],["chassis_no","VIN No.","text"],["stock_value","Stock Value","money"],["purchase_date","Purchase Date","date"],["status","Status","text"]];
 const FIELD_HEADING = Object.fromEntries([...EXCEL_FIELDS, ...DERIVED_FIELDS].map(f => [f[0], f[1]]));
 const FIELD_TYPE = Object.fromEntries([...EXCEL_FIELDS, ...DERIVED_FIELDS].map(f => [f[0], f[2]]));
 

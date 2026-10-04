@@ -1,7 +1,7 @@
 const MENU = [
   {section:"MAIN", items:[["dashboard","Dashboard","▦"]]},
   {section:"VEHICLE MANAGEMENT", items:[
-    ["vehicles","Vehicle Stock","▤"],["search","Search by Chassis / VIN","⌕"],
+    ["vehicles","Vehicle Stock","▤"],["search","Search by VIN No.","⌕"],
     ["status","Current Status","◉"],["timeline","View Timeline","◷"]
   ]},
   {section:"DATA IMPORT", items:[
@@ -9,7 +9,7 @@ const MENU = [
     ["sales-import","Sales Report Import","⇧"],["import-history","Import History","≡"]
   ]},
   {section:"GATE MANAGEMENT", items:[
-    ["bhilarwadi","Bhilarwadi In / Out","⇄"],["gate","Vehicle In / Out","⇄"],
+    ["bhilarwadi","bhilarwadi vehicle in","⇄"],["gate","Vehicle In / Out","⇄"],
     ["bulk-gate","Bulk Vehicle In / Out","⇄"],["gate-pass","Gate Pass","▣"],["register","In-Out Register","☷"]
   ]},
   {section:"DELIVERY", items:[
@@ -228,7 +228,7 @@ async function loadDashboardData(){
 async function renderVehicles(page){
   const title=page==="search"?"Search Vehicle":"Vehicle Stock";
   $("content").innerHTML=`
-  <div class="toolbar"><div class="searchbox"><input id="vehicleSearch" placeholder="Search VIN / chassis / model / color"><button onclick="queryVehicles()">Search</button></div>
+  <div class="toolbar"><div class="searchbox"><input id="vehicleSearch" placeholder="Search VIN No. / model / color"><button onclick="queryVehicles()">Search</button></div>
   <button class="primary-btn" onclick="openVehicleForm()">+ Add Vehicle</button></div>
   <div class="panel"><div class="table-wrap" id="vehicleResults">${emptyState("Enter a search or load live vehicle stock.")}</div></div>
   <div id="modal"></div>`;
@@ -240,12 +240,12 @@ async function queryVehicles(){
   let query=state.supabase.from("vehicles").select("id,vin,chassis_no,model,variant,color,location_id,status,finance_company,stock_value,purchase_date").order("created_at",{ascending:false}).limit(100);
   if(q) query=query.or(`vin.ilike.%${q}%,chassis_no.ilike.%${q}%,model.ilike.%${q}%,color.ilike.%${q}%`);
   const {data,error}=await query;
-  $("vehicleResults").innerHTML=error?emptyState(error.message):table(["VIN","Chassis","Model","Variant","Color","Status","Value"],(data||[]).map(v=>[`<b>${esc(v.vin)}</b>`,esc(v.chassis_no),esc(v.model),esc(v.variant),esc(v.color),`<span class="badge">${esc(v.status)}</span>`,money(v.stock_value)]));
+  $("vehicleResults").innerHTML=error?emptyState(error.message):table(["VIN No.","Model","Variant","Color","Status","Value"],(data||[]).map(v=>[`<b>${esc(v.vin)}</b>`,esc(v.model),esc(v.variant),esc(v.color),`<span class="badge">${esc(v.status)}</span>`,money(v.stock_value)]));
 }
 function openVehicleForm(){
  $("modal").innerHTML=`<div class="modal-bg"><div class="modal"><div class="panel-head"><h3>Add Vehicle</h3><button class="icon-btn" onclick="closeModal()">×</button></div>
  <form id="vehicleForm" class="form-grid">
- ${["vin","chassis_no","engine_no","model","variant","color","fuel_type","transmission","order_no","dealer_code","finance_company"].map(x=>`<div><label>${x.replaceAll("_"," ").toUpperCase()}</label><input name="${x}" required="${x==="vin"}></div>`).join("")}
+ ${["vin","chassis_no","engine_no","model","variant","color","fuel_type","transmission","order_no","dealer_code","finance_company"].map(x=>`<div><label>${x==="vin"?"VIN NO.":x==="chassis_no"?"VIN NO.":x.replaceAll("_"," ").toUpperCase()}</label><input name="${x}" required="${x==="vin"}></div>`).join("")}
  <div><label>STOCK VALUE</label><input name="stock_value" type="number" step="0.01"></div>
  <div class="full"><label>REMARKS</label><textarea name="remarks"></textarea></div>
  <div class="full form-actions"><button type="button" class="secondary-btn" onclick="closeModal()">Cancel</button><button class="primary-btn">Save Vehicle</button></div></form></div></div>`;
@@ -287,7 +287,7 @@ async function loadImportHistory(){
 }
 
 function renderGate(page){
- const title={bhilarwadi:"Bhilarwadi In / Out",gate:"Vehicle In / Out","bulk-gate":"Bulk Vehicle In / Out","gate-pass":"Gate Pass",register:"In-Out Register"}[page];
+ const title={bhilarwadi:"bhilarwadi vehicle in",gate:"Vehicle In / Out","bulk-gate":"Bulk Vehicle In / Out","gate-pass":"Gate Pass",register:"In-Out Register"}[page];
  $("content").innerHTML=`<div class="panel"><div class="panel-head"><h3>${title}</h3>${page==="register"?`<button class="secondary-btn" type="button" onclick="loadGateRegister()" aria-label="Refresh" title="Refresh">↻</button>`:""}</div>
  ${page==="register"?`<div id="gateRegister">${emptyState("No live gate movements.")}</div>`:`<form id="gateForm" class="form-grid">
  <div><label>VIN</label><input name="vin" required></div><div><label>MOVEMENT</label><select name="movement_type"><option>IN</option><option>OUT</option></select></div>

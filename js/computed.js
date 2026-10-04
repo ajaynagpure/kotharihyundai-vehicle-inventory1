@@ -86,7 +86,7 @@ function gateRowsWithVehicles(rows, vehicles){
   return rows.map(x => {
     const vehicle = byId.get(String(x.vehicle_id)) || byVin.get(String(x.vin || x.chassis_no || x.vehicle_no || "").trim().toUpperCase());
     const model = x.model && x.model !== "-" ? x.model : vehicle?.model || vehicle?.model_name || "-";
-    return {...x, model, stock_value:x.stock_value ?? vehicle?.stock_value ?? 0, vehicle_location_id:vehicle?.location_id || null,
+    return {...x, vin:x.vin || vehicle?.vin || x.chassis_no || "", model, vehicle_status:vehicle?.status || "", stock_value:x.stock_value ?? vehicle?.stock_value ?? 0, vehicle_location_id:vehicle?.location_id || null,
       source_location:x.from_location || "", destination_location:x.to_location || ""};
   });
 }
@@ -100,23 +100,75 @@ async function gateRowsFallback(vehicles = null){
   });
   return gateRowsWithVehicles(normalized, vehicles ?? await allVehicles());
 }
-function awaitingArrivalRows(rows){
-  const latest = new Map();
+function gateMovementKeys(rows){
+  const vehicleIdByVin = new Map();
   rows.forEach(row => {
     const vin = String(row.vin || row.chassis_no || row.vehicle_no || "").trim().toUpperCase().replace(/\s+/g, "");
-    const key = vin || (row.vehicle_id ? `id:${row.vehicle_id}` : "");
+    if(vin && row.vehicle_id) vehicleIdByVin.set(vin, String(row.vehicle_id));
+  });
+  return rows.map(row => {
+    const vin = String(row.vin || row.chassis_no || row.vehicle_no || "").trim().toUpperCase().replace(/\s+/g, "");
+    return row.vehicle_id ? `id:${row.vehicle_id}` : vin && vehicleIdByVin.has(vin) ? `id:${vehicleIdByVin.get(vin)}` : vin;
+  });
+}
+function gateMovementTime(row){ return Date.parse(row.created_at || row.movement_time || row.receipt_dt || "") || 0; }
+function latestGateMovementRows(rows){
+  const latest = new Map(), keys = gateMovementKeys(rows);
+  rows.forEach((row,index) => {
+    const key = keys[index];
     if(!key) return;
     const previous = latest.get(key);
-    const time = Date.parse(row.created_at || row.movement_time || row.receipt_dt || "") || 0;
-    const previousTime = Date.parse(previous?.created_at || previous?.movement_time || previous?.receipt_dt || "") || 0;
-    if(!previous || time >= previousTime) latest.set(key, row);
+    const time = gateMovementTime(row);
+    const previousTime = gateMovementTime(previous || {});
+    const isIn = String(row.movement_type || "").toUpperCase() === "IN";
+    const previousIsIn = String(previous?.movement_type || "").toUpperCase() === "IN";
+    if(!previous || time > previousTime || (time === previousTime && isIn && !previousIsIn)) latest.set(key, row);
   });
-  return [...latest.values()].filter(row => String(row.movement_type || "").toUpperCase() === "OUT").map(row => ({
-    ...row,
-    status:"In Transit",
-    in_location:row.destination_location || row.to_location || row.location_name || "-",
-    out_location:row.source_location || (row.vehicle_location_id ? locName(row.vehicle_location_id) : "-")
-  }));
+  return [...latest.values()].sort((a,b) => gateMovementTime(b) - gateMovementTime(a));
+}
+function gateMovementLocation(row){
+  const inbound = String(row.movement_type || "").toUpperCase() === "IN";
+  return (inbound ? row.to_location : row.from_location) || row.location_name || "-";
+}
+function recentGateMovementRows(rows){
+  const keys = gateMovementKeys(rows), byKey = new Map();
+  rows.forEach((row,index) => {
+    const key = keys[index];
+    if(!key) return;
+    if(!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(row);
+  });
+  return [...byKey.values()].map(history => {
+    history.sort((a,b) => gateMovementTime(b) - gateMovementTime(a));
+    const latest = history[0];
+    if(String(latest.movement_type || "").toUpperCase() !== "IN") return latest;
+    const previousOut = history.find(row => String(row.movement_type || "").toUpperCase() === "OUT" && gateMovementTime(row) <= gateMovementTime(latest));
+    return previousOut ? {...latest, paired_out:previousOut} : latest;
+  }).sort((a,b) => gateMovementTime(b) - gateMovementTime(a));
+}
+function awaitingArrivalRows(rows){
+  const keys = gateMovementKeys(rows), byKey = new Map();
+  const keyByRow = new Map();
+  rows.forEach((row,index) => {
+    const key = keys[index];
+    if(!key) return;
+    keyByRow.set(row, key);
+    if(!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(row);
+  });
+  return latestGateMovementRows(rows).filter(row => String(row.movement_type || "").toUpperCase() === "OUT").map(row => {
+    const history = byKey.get(keyByRow.get(row)) || [], outTime = gateMovementTime(row);
+    const previousIn = history.filter(entry =>
+      String(entry.movement_type || "").toUpperCase() === "IN" && gateMovementTime(entry) < outTime
+    ).sort((a,b) => gateMovementTime(b) - gateMovementTime(a))[0];
+    return {
+      ...row,
+      status:row.vehicle_status || row.status || "-",
+      movement_status:"Arriving",
+      in_location:previousIn ? gateMovementLocation(previousIn) : "-",
+      out_location:gateMovementLocation(row)
+    };
+  });
 }
 async function computedRows(source){
   if(source === "gate_movement_report") return gateRowsFallback();

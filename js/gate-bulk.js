@@ -21,7 +21,7 @@ function bulkHtml(showDriver = true, gate = ""){ const bhilarwadi = gate === "Bh
     ${showDriver ? `<div class="gate-field"><label>DRIVER NAME</label><input id="bkDriver"></div>` : ""}
     <div class="gate-field gate-remarks-field"><label>REMARKS</label><textarea id="bkRemarks"></textarea></div>
   </div>
-  <div class="bulk-block"><b>1. Chassis निवडा</b>
+  <div class="bulk-block"><b>1. VIN No. निवडा</b>
     <div class="gate-filters"><input id="bkSearch" type="search" placeholder="VIN / last 6 digits" style="width:180px"><button class="primary-btn" type="button" id="bkFind">⌕ Search</button><button class="secondary-btn" type="button" id="bkScan">📷 Scan</button><button class="secondary-btn" type="button" id="bkInside">Currently IN (this gate)</button></div>
     <textarea id="bkPaste" class="bulk-paste" placeholder="किंवा multiple VIN / last 6 digits paste करा (line / comma ने वेगळे)"></textarea>
     <button class="secondary-btn" type="button" id="bkPasteAdd">＋ Add pasted list</button>
@@ -90,7 +90,7 @@ async function bulkPaste(){
 function drawBulkList(){
   $("bkCount").textContent = BULK.items.length;
   const box = $("bkList"), inMode = BULK.gate === "Bhilarwadi" && $("bkType").value === "IN";
-  if(!BULK.items.length){ box.innerHTML = emptyState("अजून कोणतीही chassis निवडलेली नाही."); return; }
+  if(!BULK.items.length){ box.innerHTML = emptyState("अजून कोणताही VIN No. निवडलेला नाही."); return; }
   const inCell = (it,i) => { const d = it.inx, ph = d ? Object.keys(d.files).length : 0, tx = d ? d.tyres.filter(Boolean).length + (d.ev ? 1 : 0) : 0;
     return raw(`<button class="table-icon-btn" type="button" data-bin="${i}" title="Photos / tyre serials / EV battery">📷 ${ph}/7 · ${tx} no.</button>`); };
   box.innerHTML = table(["#","VIN","Model","Variant","Color","Finance",...(inMode ? ["IN Details"] : []),""], BULK.items.map((it,i) => [i+1, it.vin, it.model, it.variant, it.color, it.finance_bank,
@@ -103,7 +103,7 @@ async function saveBulk(){
   if(!state.isAdmin) return toast("Bulk In / Out is available to administrators only.","error");
   const items = BULK.items, type = $("bkType").value, date = $("bkDate").value;
   if(BULK.gate === "Bhilarwadi" && type !== "IN") return toast("Bhilarwadi In page only allows IN movements.","error");
-  if(!items.length){ toast("आधी chassis निवडा.","error"); return; }
+  if(!items.length){ toast("आधी VIN No. निवडा.","error"); return; }
   if(!date){ toast("Receipt date टाका.","error"); return; }
   const location = nz($("bkLocation")?.value);
   if(!location){ toast("Location निवडा.","error"); return; }

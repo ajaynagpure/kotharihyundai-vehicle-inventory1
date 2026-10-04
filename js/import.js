@@ -17,8 +17,19 @@ const IMPORT_COLUMNS = {
   DELIVERY:["main_dealer","dealer_code","excise_invoice_no","hmi_invoice_no","order_date","order_no","hmi_invoice_date","hmi_invoice_amount","bhilarwadi_in_date","model","variant","color","vin","basic_price","freight_insurance","total_invoice_value","gst","comp_cess","engine_no","finance_company","delivery_date","delivery_location","bill_date","bill_no","customer_name"]
 };
 const DELIVERY_COLUMN_LABELS = Object.fromEntries(IMPORT_COLUMNS.DELIVERY.map(k => [k,
-  k === "bhilarwadi_in_date" ? "BHILARWADI VEHICLE IN DT" : k === "gst" ? "GST" : k === "delivery_location" ? FIELD_HEADING.sales_location : FIELD_HEADING[k]
+  k === "bhilarwadi_in_date" ? "bhilarwadi vehicle Receipt Dt" : k === "gst" ? "GST" : k === "delivery_location" ? FIELD_HEADING.sales_location : FIELD_HEADING[k]
 ]));
+function downloadImportTemplate(){
+  if(!window.XLSX) return toast("Excel library not loaded (check internet).","error");
+  const wb = XLSX.utils.book_new();
+  [["ORDER","Order"],["PURCHASE","Purchase"],["SALES","Sales"],["DELIVERY","Delivery"]].forEach(([key,sheet]) => {
+    const headings = IMPORT_COLUMNS[key].map(column => key === "DELIVERY" ? DELIVERY_COLUMN_LABELS[column] : FIELD_HEADING[column]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headings]), sheet);
+  });
+  XLSX.writeFile(wb, "kothari-hyundai-import-template.xlsx");
+}
+const BULK_IMPORT_SHEETS = [["ORDER","Order"],["PURCHASE","Purchase"],["SALES","Sales"],["DELIVERY","Delivery"]];
+let bulkImportRows = null, bulkImportFileName = "";
 let importHubPage = "";
 const STATUS_MOVABLE = ["", "pending order", "in transit", "cancelled order"];   // purchase import never pulls later stages back
 const SQL_HINT = "Database columns are missing. Run IMPORT_COLUMNS_FIX.sql once in Supabase SQL Editor, then import again.";
@@ -30,6 +41,7 @@ const IMPORT_HEADER_MAP = (() => {                            // normalised Exce
   const m = new Map();
   [...EXCEL_FIELDS, ...DERIVED_FIELDS].forEach(([k, heading, type, extra = []]) => [heading, ...extra].forEach(a => { if(!m.has(importNorm(a))) m.set(importNorm(a), [k, type]); }));
   m.set(importNorm("GST"), ["gst", "money"]);
+  m.set(importNorm("bhilarwadi vehicle Receipt Dt"), ["bhilarwadi_in_date", "date"]);
   m.set(importNorm("BHILARWADI VEHICLE IN DT"), ["bhilarwadi_in_date", "date"]);
   m.set(importNorm("HMI INV. DATE"), ["hmi_invoice_date", "date"]);
   m.set(importNorm("HMI INV AMOUNT"), ["hmi_invoice_amount", "money"]);
@@ -138,33 +150,143 @@ async function renderImport(page){
     const available = Object.entries(IMPORT_TYPES).filter(([id]) => can(id));
     if(can("manual-purchase")) available.splice(available.findIndex(([id]) => id === "purchase-import") + 1, 0, ["manual-purchase", {title:"Manual Purchase Entry"}]);
     if(!available.length) return renderDenied();
+    const canBulkImport = ["order-import","purchase-import","sales-import","delivery-import"].every(can);
+    const canShowTemplate = activeImportTab => activeImportTab === "bulk-import" && canBulkImport;
     const active = available.some(([id]) => id === importHubPage) ? importHubPage : available[0][0];
     importHubPage = active;
-    $("content").innerHTML = `<div class="import-hub"><div class="tabs" id="importTypeTabs">${available.map(([id,t]) => `<button type="button" class="tab-btn${id === active ? " active" : ""}" data-import-type="${id}">${esc(t.title)}</button>`).join("")}</div><div id="importTypeContent"></div></div>`;
+    $("content").innerHTML = `<div class="import-hub"><div class="tabs" id="importTypeTabs">${available.map(([id,t]) => `<button type="button" class="tab-btn${id === active ? " active" : ""}" data-import-type="${id}">${esc(t.title)}</button>`).join("")}${canBulkImport ? `<button type="button" class="tab-btn${active === "bulk-import" ? " active" : ""}" data-import-type="bulk-import">Bulk Import</button>` : ""}</div><div id="importTemplateAction" class="form-actions" style="margin:0 0 12px">${canShowTemplate(active) ? `<button type="button" class="secondary-btn" id="downloadImportTemplate">Download 4-Sheet Import Template</button>` : ""}</div><div id="importTypeContent"></div></div>`;
+    const updateTemplateButton = () => {
+      $("importTemplateAction").innerHTML = canShowTemplate(importHubPage)
+        ? `<button type="button" class="secondary-btn" id="downloadImportTemplate">Download 4-Sheet Import Template</button>`
+        : "";
+      $("downloadImportTemplate")?.addEventListener("click", downloadImportTemplate);
+    };
+    updateTemplateButton();
     $("importTypeTabs").querySelectorAll("[data-import-type]").forEach(button => button.addEventListener("click", async () => {
       importHubPage = button.dataset.importType;
       $("importTypeTabs").querySelectorAll(".tab-btn").forEach(tab => tab.classList.toggle("active", tab === button));
+      updateTemplateButton();
       if(importHubPage === "manual-purchase") renderManualPurchaseEntry($("importTypeContent"));
+      else if(importHubPage === "bulk-import") renderBulkImportForm($("importTypeContent"));
       else await renderImportForm(importHubPage, $("importTypeContent"));
     }));
     if(active === "manual-purchase") return renderManualPurchaseEntry($("importTypeContent"));
+    if(active === "bulk-import") return renderBulkImportForm($("importTypeContent"));
     return renderImportForm(active, $("importTypeContent"));
   }
   if(page === "manual-purchase") return renderManualPurchaseEntry($("content"));
   return renderImportForm(page, $("content"));
 }
+function renderBulkImportForm(target){
+  if(!["order-import","purchase-import","sales-import","delivery-import"].every(can)){ renderDenied(); return; }
+  bulkImportRows = null;
+  target.innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>Bulk Import — Order, Purchase, Sales &amp; Delivery</h3></div>
+    <p class="form-help">Upload the 4-sheet import template. Sheets are processed in Order → Purchase → Sales → Delivery sequence. Every sheet is required; rows without the required Order No. or VIN are skipped using the same rules as individual imports.</p>
+    <div class="dropzone"><input id="bulkImportFile" type="file" accept=".xlsx,.xls"><div><button class="secondary-btn" id="bulkImportPreview" type="button">Preview Sheets</button> <button class="primary-btn" id="bulkImportGo" type="button" disabled>Import All Sheets</button></div></div>
+    <div id="bulkImportMsg" class="message"></div><div id="bulkImportPreviewBox" class="table-wrap"></div></div>`;
+  $("bulkImportPreview").addEventListener("click", previewBulkImport);
+  $("bulkImportGo").addEventListener("click", runBulkImport);
+}
+async function previewBulkImport(){
+  const file = $("bulkImportFile").files[0], msg = $("bulkImportMsg"), preview = $("bulkImportPreviewBox");
+  $("bulkImportGo").disabled = true;
+  bulkImportRows = null;
+  preview.innerHTML = "";
+  if(!file){ msg.textContent = "Select the 4-sheet Excel workbook first."; msg.className = "message error"; return; }
+  if(!window.XLSX){ msg.textContent = "Excel library not loaded (check internet)."; msg.className = "message error"; return; }
+  let workbook;
+  try { workbook = XLSX.read(await file.arrayBuffer(), {type:"array", cellDates:true}); }
+  catch(err){ msg.textContent = "Could not read workbook: " + (err.message || err); msg.className = "message error"; return; }
+  const sheetByKey = new Map();
+  for(const sheetName of workbook.SheetNames){
+    const normalized = importNorm(sheetName);
+    const match = BULK_IMPORT_SHEETS.find(([key,name]) => normalized === importNorm(name) || normalized === importNorm(IMPORT_TYPES[`${name.toLowerCase()}-import`]?.title));
+    if(!match) continue;
+    if(sheetByKey.has(match[0])){ msg.textContent = `Workbook has more than one ${match[1]} sheet.`; msg.className = "message error"; return; }
+    sheetByKey.set(match[0], workbook.Sheets[sheetName]);
+  }
+  const missing = BULK_IMPORT_SHEETS.filter(([key]) => !sheetByKey.has(key)).map(([,name]) => name);
+  if(missing.length){ msg.textContent = `Missing required sheet${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}.`; msg.className = "message error"; return; }
+
+  bulkImportRows = BULK_IMPORT_SHEETS.map(([key,name]) => {
+    const raw = XLSX.utils.sheet_to_json(sheetByKey.get(key), {defval:""});
+    const rows = importDedupe(raw.map(row => key === "SALES" ? importSalesOnly(importMap(row)) : importMap(row))
+      .filter(row => row.order_no || row.vin), row => key === "ORDER" ? row.order_no : row.vin);
+    const keyField = key === "ORDER" ? "order_no" : "vin";
+    const hasKeyHeader = raw.length && Object.keys(raw[0]).some(header => IMPORT_HEADER_MAP.get(importNorm(header))?.[0] === keyField);
+    const errors = [];
+    if(!hasKeyHeader) errors.push(`Required ${keyField === "order_no" ? "Order No" : "VIN"} column heading is missing.`);
+    const unmapped = raw.length ? Object.keys(raw[0]).filter(header => !IMPORT_HEADER_MAP.has(importNorm(header)) && importNorm(header) !== "s no" && importNorm(header) !== "no") : [];
+    if(state.settings?.imp?.[key] === false && rows.length) errors.push("This import is turned off in Import Configuration.");
+    return {key,name,rows,rawCount:raw.length,missingKey:rows.filter(row => !row[keyField]).length,unmapped,errors};
+  });
+  const errors = bulkImportRows.flatMap(sheet => sheet.errors.map(error => `${sheet.name}: ${error}`));
+  preview.innerHTML = table(["Sheet","Rows in sheet","Importable rows","Missing key rows","Unmapped headings","Status"], bulkImportRows.map(sheet => [
+    sheet.name,sheet.rawCount,sheet.rows.length,sheet.missingKey,sheet.unmapped.join(", ") || "-",
+    sheet.errors.length ? sheet.errors.join(" ") : "Ready"
+  ]));
+  msg.textContent = errors.length ? errors.join(" ") : `All four sheets are ready from ${file.name}. Import will run in Order → Purchase → Sales → Delivery sequence.`;
+  msg.className = errors.length ? "message error" : "message success";
+  if(!errors.length) bulkImportFileName = file.name;
+  $("bulkImportGo").disabled = errors.length > 0;
+}
+async function runBulkImport(){
+  const button = $("bulkImportGo"), msg = $("bulkImportMsg"), results = [];
+  if(!bulkImportRows || !bulkImportFileName) return;
+  button.disabled = true;
+  $("bulkImportPreview").disabled = true;
+  msg.textContent = "Bulk import is running…";
+  msg.className = "message";
+  importIgnored = [];
+  try {
+    for(const sheet of bulkImportRows){
+      if(sheet.errors.length) throw new Error(`${sheet.name}: ${sheet.errors.join(" ")}`);
+      if(state.settings?.imp?.[sheet.key] === false && sheet.rows.length)
+        throw new Error(`${sheet.name}: Import is turned off in Import Configuration.`);
+      importDropped.clear();
+      const result = await importRunRows(sheet.key, sheet.rows);
+      results.push({sheet,result});
+      try {
+        await importWrite(payload => state.supabase.from("import_batches").insert(payload), {
+          import_type:sheet.key,file_name:`${bulkImportFileName} — ${sheet.name}`,total_rows:sheet.rawCount,
+          successful_rows:result.added + result.updated,failed_rows:result.failed,status:result.failed ? "Partial" : "Completed"
+        });
+      } catch(err){ console.warn(`Could not save ${sheet.name} import history:`, err); }
+      logAudit("IMPORT","import",sheet.key,null,result);
+      if(typeof VCACHE !== "undefined") VCACHE.rows = null;
+    }
+  } catch(err){
+    msg.textContent = `Bulk import stopped: ${err.message || err}`;
+    msg.className = "message error";
+    $("bulkImportPreviewBox").insertAdjacentHTML("beforeend", table(["Sheet","Added","Updated","Failed","Ignored","First error"], results.map(({sheet,result}) => [
+      sheet.name,result.added,result.updated,result.failed,result.ignored,result.firstError || "-"
+    ])));
+    $("bulkImportPreview").disabled = false;
+    button.disabled = true;
+    return;
+  }
+  $("bulkImportPreviewBox").innerHTML = table(["Sheet","Added","Updated","Failed","Ignored","First error"], results.map(({sheet,result}) => [
+    sheet.name,result.added,result.updated,result.failed,result.ignored,result.firstError || "-"
+  ]));
+  const failed = results.reduce((sum,item) => sum + item.result.failed,0);
+  const ok = results.reduce((sum,item) => sum + item.result.added + item.result.updated,0);
+  msg.textContent = `All four sheets processed: ${ok} added/updated, ${failed} failed. Check each sheet's result above.`;
+  msg.className = `message ${failed ? "error" : "success"}`;
+  toast(`Bulk import completed: ${ok} added/updated, ${failed} failed.`,failed ? "error" : "success");
+  $("bulkImportPreview").disabled = false;
+}
 function renderManualPurchaseEntry(target){
   if(!can("manual-purchase")){ renderDenied(); return; }
   const groups = [
-    ["Hyundai Vehicle Details",["vin","model","variant","color","engine_no","hsn_code","quantity"]],
-    ["Invoice and Finance Details",["finance_company","hmi_invoice_no","hmi_invoice_date"]],
+    ["Dealer and Order Details",["main_dealer","dealer_code","order_date","order_no"]],
+    ["Hyundai Vehicle Details",["vin","model","variant","color","fsc","variant_code","engine_no","hsn_code","emission_type","quantity"]],
+    ["Invoice and Finance Details",["hmi_invoice_date","hmi_invoice_no","excise_invoice_no","finance_company","departure_date","lot_number","transporter_name","transporter_vehicle_no","grn_no","grn_date","fob_key"]],
     ["Purchase Values and Taxes",["basic_price","freight_insurance","total_invoice_value","hmi_invoice_amount","igst_pct","igst","cgst_pct","cgst","sgst_pct","sgst","comp_cess_pct","comp_cess","tcs_pct","tcs_value","sale_tax"]],
   ];
-  const manualLabels = {hmi_invoice_no:"Other Dealer Invoice No.",hmi_invoice_date:"Other Dealer Date"};
   const blocked = state.settings?.imp?.PURCHASE === false;
   const field = key => {
     const type = FIELD_TYPE[key] || "text", inputType = type === "date" ? "date" : ["money","num"].includes(type) ? "number" : "text";
-    return `<div><label for="mp_${key}">${esc(manualLabels[key] || FIELD_HEADING[key])}</label><input id="mp_${key}" name="${key}" type="${inputType}" ${inputType === "number" ? 'step="any"' : ""} ${key === "vin" ? "required" : ""}></div>`;
+    return `<div><label for="mp_${key}">${esc(FIELD_HEADING[key])}</label><input id="mp_${key}" name="${key}" type="${inputType}" ${inputType === "number" ? 'step="any"' : ""} ${key === "vin" ? "required" : ""}></div>`;
   };
   target.innerHTML = `<div class="panel import-panel"><div class="panel-head"><h3>Manual Purchase Entry — Other Dealer</h3></div>
     <p class="form-help">Enter the vehicle, invoice, finance and purchase value details. The vehicle is saved as In Transit; matching Pending Orders follow the existing Purchase Import rules.</p>
@@ -206,7 +328,7 @@ async function renderImportForm(page, target){
     ORDER: "File: <b>SaleDealerOrderStatus.xlsx</b>. <b>Ordered / Allocated</b> rows are added as <b>Pending Order</b>; <b>Invoiced</b> rows can be added as <b>In Transit</b>. <b>Cancelled Order</b> rows are imported with a separate status and are not counted in Pending Order or stock.",
     PURCHASE: "File: <b>VehicleDeliveryStatusReport.xlsx</b>. Imported as <b>In Transit</b>. If the <b>Order No</b> (or VIN) exists as Pending Order it moves to In Transit. Free Stock / Delivered vehicles keep their status.",
     SALES: "Only <b>Tally Invoice Date, VIN, Customer Name, Tally Invoice No and Tally Location</b> are imported; <b>Engine No, Model, Variant, Color and Total Invoice value</b> are fetched from the <b>Purchase report</b>. Matching VINs update their Sales details; Delivered vehicles stay Delivered. Rows whose VIN is not in the Purchase report are ignored.",
-    DELIVERY: "Delivery rows match existing vehicles by VIN, save delivery details, and update matched vehicle status to <b>Delivered</b>. Rows without a matching vehicle or delivery date are skipped."
+    DELIVERY: "Delivery rows are accepted only for vehicles in <b>Tally Done</b> status. Rows without Tally completion are rejected with the current vehicle status; rows without a matching vehicle or delivery date are also rejected."
   }[t.key];
   const columnLabel = k => t.key === "DELIVERY" ? DELIVERY_COLUMN_LABELS[k] : FIELD_HEADING[k];
   const columns = IMPORT_COLUMNS[t.key].map(columnLabel).join(", ");
@@ -264,7 +386,7 @@ async function importPreviewFile(page){
     return r[c];
     }), ...(t.key === "SALES" ? (() => { const p = ex?.byVin.get(r.vin), ok = importHasPurchase(p);
       return [ok ? "✓ Found" : "✗ Not in Purchase report", !ok ? "Ignored" : vStage(p) === "delivered" ? "Delivered (status kept)" : "Tally Done"]; })()
-      : t.key === "DELIVERY" ? (() => { const vehicle = ex?.byVin.get(r.vin), found = !!vehicle; return [!found ? "✗ VIN not found" : vStage(vehicle) !== "bill" ? "✗ Not in Tally Done" : "✓ Tally Done", !found ? "Ignored" : vStage(vehicle) !== "bill" ? "Delivery blocked" : r.delivery_date ? "Will mark Delivered" : "Missing delivery date"]; })() : [])]));
+      : t.key === "DELIVERY" ? (() => { const vehicle = ex?.byVin.get(r.vin), found = !!vehicle, eligible = found && vStage(vehicle) === "bill"; return [!found ? "✗ VIN not found" : !eligible ? `✗ Tally incomplete (${vehicle.status || "Unknown"})` : "✓ Tally Done", !found ? "Ignored" : !eligible ? "Complete Sales/Tally first" : r.delivery_date ? "Will mark Delivered" : "Missing delivery date"]; })() : [])]));
   $("importGo").disabled = !importRows.length;
 }
 async function importInsertRows(rows, res){
@@ -292,7 +414,11 @@ async function importRunRows(key, rows){
       if(!r.vin){ res.failed++; res.firstError ||= "VIN missing"; continue; }
       const vehicle = ex.byVin.get(r.vin);
       if(!vehicle){ res.ignored++; importIgnored.push(r.vin); continue; }
-      if(vStage(vehicle) !== "bill"){ res.failed++; res.firstError ||= `${r.vin}: Not in Tally Done. Delivery is blocked.`; continue; }
+      if(vStage(vehicle) !== "bill"){
+        res.failed++;
+        res.firstError ||= `${r.vin}: Delivery blocked — Tally Done is incomplete (current status: ${vehicle.status || "Unknown"}). Complete/import the Sales (Tally) entry first.`;
+        continue;
+      }
       if(!r.delivery_date){ res.failed++; res.firstError ||= `Delivery Date missing for ${r.vin}`; continue; }
       const hadDelivery = existingDeliveries.has(String(vehicle.id)), record = {vehicle_id:vehicle.id};
       if(r.delivery_no) record.delivery_no = r.delivery_no;
@@ -437,7 +563,7 @@ const IDATA_TABS = {
   PURCHASE:{label:"Purchase Data", test:v => !isBlank(v.hmi_invoice_no) || !isBlank(v.hmi_invoice_date) || !isBlank(v.purchase_date),
     cols:[col("VIN No.","vin"),col("Engine No","engine_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Dealer","dealer_code"),col("Financier Name","finance_company"),col("HMI Invoice No","hmi_invoice_no"),col("HMI Invoice Date","hmi_invoice_date","date"),col("Status","status"),col("HMI Invoice Amount","hmi_invoice_amount","money")]},
   SALES:{label:"Sales Data", test:v => ["bill","delivered"].includes(vStage(v)) || !isBlank(v.sales_imported_at),
-    cols:[col("Tally Invoice Date","bill_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Tally Location","sales_location"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Total Invoice value","total_invoice_value","money"),col("Status","status"),col("Delivery Date","delivery_date","date")]},
+    cols:[col("Tally Invoice Date","bill_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Tally Location","sales_location"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Total Invoice value","total_invoice_value","money"),col("Status","status")]},
   DELIVERY:{label:"Delivery Data", test:v => !!v.delivery_record_id || !!v.delivery_date,
     cols:[col("Delivery No","delivery_no"),col("Delivery Date","delivery_date","date"),col("Bhilarwadi Vehicle IN DT","bhilarwadi_in_date","date"),col("VIN No.","vin"),col("Engine No","engine_no"),col("Model","model"),col("Variant","variant"),col("Color","color"),col("Customer Name","customer_name"),col("Tally Invoice No","bill_no"),col("Financier Name","finance_company"),col("Tally Location","dloc")]}
 };

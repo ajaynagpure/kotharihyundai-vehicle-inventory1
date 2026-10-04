@@ -6,14 +6,14 @@
 const MENU = [
   {section:"MAIN", items:[["dashboard","Dashboard","▦"]], collapsible:false},
   {section:"VEHICLE MANAGEMENT", items:[
-    ["vehicles","Vehicle Stock","▤"],["search","Search by Chassis / VIN","⌕"],
+    ["vehicles","Vehicle Stock","▤"],["search","Search by VIN No.","⌕"],
     ["timeline","View Timeline","◷"]
   ]},
   {section:"DATA IMPORT", items:[
     ["data-import","Data Import","⇧"],["import-data","Imported Data","☰"],["import-history","Import History","≡"]
   ]},
   {section:"GATE MANAGEMENT", items:[
-    ["bhilarwadi","Bhilarwadi In","⇄"],["gate","Branch Vehicle In / Out","⇄"],
+    ["bhilarwadi","bhilarwadi vehicle in","⇄"],["gate","Vehicle In/ Out","⇄"],
     ["register","In-Out Register","☷"],["documents","Bhilarwadi Documents","▣"]
   ]},
   {section:"DELIVERY", items:[
@@ -207,7 +207,6 @@ function cleanQuery(q){ return String(q || "").replace(/[,()%*\\:"']/g," ").repl
 /* A successful save briefly confirms itself on the button that started the operation. */
 let lastSaveBtn = null, lastSaveAt = 0;
 const SAVE_ACTION = /\b(save|import|done|update|apply|create|complete|add)\b/i;
-const SAVE_SUCCESS = /\b(saved|updated|imported|created|completed|renamed)\b/i;
 function rememberSaveButton(b){
   if(b && SAVE_ACTION.test(b.textContent || "")){ lastSaveBtn = b; lastSaveAt = Date.now(); }
 }
@@ -219,8 +218,7 @@ document.addEventListener("submit", e => {
   lastSaveBtn = null;
   rememberSaveButton(e.submitter || e.target.querySelector?.('button[type="submit"],button:not([type])'));
 }, true);
-function markSaved(msg){
-  if(!SAVE_SUCCESS.test(msg)) return;
+function markSaved(){
   const b = lastSaveBtn;
   if(!b || Date.now() - lastSaveAt > 60000 || b.dataset.savedShown) return;
   setTimeout(() => {                                   // after the handler's own "finally" has restored the label
@@ -232,7 +230,7 @@ function markSaved(msg){
 }
 function toast(msg, type = "info"){
   if(type === "error") lastSaveBtn = null;
-  if(type === "success") markSaved(String(msg));
+  if(type === "success") markSaved();
   let box = $("toastBox");
   if(!box){
     box = document.createElement("div");
@@ -308,83 +306,12 @@ function setConnection(ok){
   $("connectionText").textContent = ok ? "Supabase connected" : "Supabase not configured";
 }
 function setLoginMessage(text, type){ const el = $("loginMessage"); el.textContent = text; el.className = "message" + (type ? " " + type : ""); }
-const LOGIN_IDLE_LIMIT_MS = 30 * 60 * 1000, LOGIN_HEARTBEAT_MS = 60 * 1000;
-let loginLeaseTimer = null, loginLeaseUserId = "", loginLeaseId = "", loginActivityKey = "", loginLastTouchAt = 0, loginLastActivityWriteAt = 0, loginLeaseBusy = false;
-function loginSessionId(userId){
-  const key = `kh_login_session_${userId}`;
-  let id = localStorage.getItem(key);
-  if(!id){
-    id = window.crypto?.randomUUID?.() || "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, character => {
-      const value = Math.floor(Math.random() * 16);
-      return (character === "x" ? value : (value & 3) | 8).toString(16);
-    });
-    localStorage.setItem(key, id);
-  }
-  return id;
-}
-function noteLoginActivity(){
-  if(!loginLeaseUserId) return;
-  const now = Date.now();
-  if(now - loginLastActivityWriteAt < 10000) return;
-  loginLastActivityWriteAt = now;
-  try { localStorage.setItem(loginActivityKey, String(now)); } catch {}
-}
-function stopLoginLease(){
-  clearInterval(loginLeaseTimer); loginLeaseTimer = null;
-  loginLeaseUserId = ""; loginLeaseId = ""; loginActivityKey = ""; loginLeaseBusy = false;
-}
-function startLoginLease(userId, sessionId){
-  stopLoginLease(); loginLeaseUserId = userId; loginLeaseId = sessionId;
-  loginActivityKey = `kh_login_activity_${userId}`;
-  loginLastActivityWriteAt = Date.now(); loginLastTouchAt = Date.now();
-  try { localStorage.setItem(loginActivityKey, String(loginLastActivityWriteAt)); } catch {}
-  loginLeaseTimer = setInterval(async () => {
-    if(loginLeaseBusy || !loginLeaseUserId || state.user?.id !== loginLeaseUserId) return;
-    const now = Date.now(), lastActivity = Number(localStorage.getItem(loginActivityKey) || 0);
-    if(now - lastActivity >= LOGIN_IDLE_LIMIT_MS){
-      await endLoginSession("You were signed out after 30 minutes of inactivity.");
-      return;
-    }
-    if(now - loginLastTouchAt < LOGIN_HEARTBEAT_MS) return;
-    loginLeaseBusy = true;
-    try {
-      const result = await state.supabase.rpc("touch_user_login_session", {p_session_id:loginLeaseId});
-      if(result.error || result.data !== true){
-        await endLoginSession("This login session is no longer active. Please log in again.");
-        return;
-      }
-      loginLastTouchAt = Date.now();
-    } catch {
-      await endLoginSession("Could not verify this login session. Please log in again.");
-    } finally { loginLeaseBusy = false; }
-  }, 15000);
-}
-async function releaseLoginLease(){
-  const userId = loginLeaseUserId, sessionId = loginLeaseId;
-  stopLoginLease();
-  if(userId && sessionId && state.supabase){
-    try { await state.supabase.rpc("release_user_login_session", {p_session_id:sessionId}); } catch {}
-  }
-}
-async function endLoginSession(message){
-  await releaseLoginLease();
-  try { await state.supabase?.auth.signOut({scope:"local"}); } catch {}
-  showLogin(); setLoginMessage(message, "error");
-}
-async function claimLoginLease(user, client = state.supabase){
-  const sessionId = loginSessionId(user.id);
-  const result = await client.rpc("claim_user_login_session", {p_session_id:sessionId});
-  if(result.error) return {ok:false, error:result.error};
-  return result.data === true ? {ok:true, sessionId} : {ok:false, occupied:true};
-}
-
 async function init(){
   // Bind UI first: a slow getSession() must never leave the form unbound (form would reload the page).
   $("loginForm").addEventListener("submit", login);
   $("logoutBtn").addEventListener("click", logout);
   $("refreshBtn").addEventListener("click", () => loadPage(state.page));
   $("mobileMenu").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
-  ["pointerdown","pointermove","keydown","touchstart"].forEach(event => document.addEventListener(event, noteLoginActivity, {passive:true}));
   document.addEventListener("click", e => {
     const sb = document.querySelector(".sidebar");
     if(sb.classList.contains("open") && !e.target.closest(".sidebar, #mobileMenu")) sb.classList.remove("open");
@@ -429,20 +356,8 @@ async function login(e){
       setLoginMessage(error.status && error.status < 500 && error.status !== 0 ? "Invalid username or password." : "Cannot reach the server. Check internet and try again.","error");
       return;
     }
-    const lease = await claimLoginLease(data.user, authClient);
-    if(lease.error){
-      await authClient.auth.signOut({scope:"local"});
-      setLoginMessage("Single-login security is not set up yet. Ask Admin to apply the LOGIN SESSION SECURITY section in database.sql.","error");
-      return;
-    }
-    if(lease.occupied){
-      await authClient.auth.signOut({scope:"local"});
-      setLoginMessage("This user is already logged in elsewhere. Log out there or wait 30 minutes after inactivity.","error");
-      return;
-    }
     const installed = await state.supabase.auth.setSession(data.session);
     if(installed.error){
-      await authClient.rpc("release_user_login_session", {p_session_id:lease.sessionId});
       await authClient.auth.signOut({scope:"local"});
       setLoginMessage("Could not start this login session. Please try again.","error");
       return;
@@ -453,12 +368,10 @@ async function login(e){
   } finally { btn.disabled = false; }
 }
 async function logout(){
-  await releaseLoginLease();
   if(state.supabase) await state.supabase.auth.signOut({scope:"local"});
   showLogin();
 }
 function showLogin(){
-  stopLoginLease();
   state.user = null; state.profile = null; state.role = ""; state.isAdmin = false; state.perms = new Set(); state.locations = null; state.settings = null;
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");
@@ -466,18 +379,6 @@ function showLogin(){
 }
 
 async function showApp(user){
-  let lease;
-  try { lease = await claimLoginLease(user); }
-  catch(err){ lease = {ok:false,error:err}; }
-  if(!lease.ok){
-    try { await state.supabase.auth.signOut({scope:"local"}); } catch {}
-    showLogin();
-    setLoginMessage(lease.occupied
-      ? "This user is already logged in elsewhere. Log out there or wait 30 minutes after inactivity."
-      : "Single-login security is not set up or could not be checked. Ask Admin to apply the LOGIN SESSION SECURITY section in database.sql.", "error");
-    return;
-  }
-  startLoginLease(user.id, lease.sessionId);
   state.user = user;
   $("loginView").classList.add("hidden");
   $("appView").classList.remove("hidden");
@@ -488,7 +389,6 @@ async function showApp(user){
     if(p.error) console.warn(p.error.message);
     if(p.data){
       if(p.data.active === false){
-        await releaseLoginLease();
         await state.supabase.auth.signOut({scope:"local"});
         showLogin();
         setLoginMessage("This user is inactive. Contact Admin.","error");
@@ -584,7 +484,7 @@ async function loadPage(page){
   if(!can(page)){ renderDenied(); return; }
   const item = MENU.flatMap(x => x.items).find(x => x[0] === page);
   $("pageTitle").textContent = item?.[1] || "Dashboard";
-  $("pageSubtitle").textContent = "Live Vehicle Inventory";
+  $("pageSubtitle").textContent = "Digital Vehicle Tracking System";
   $("content").scrollTop = 0; window.scrollTo(0, 0);
   try {
     if(page === "dashboard") return await renderDashboard();

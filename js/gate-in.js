@@ -4,7 +4,7 @@
    and the Gate Pass print bar shown right after a save. Loaded after gate-bulk.js.
    ===================================================================== */
 const GATE_BUCKET = "gate-photos";
-const IN_PHOTOS = [["photo_front","1. Vehicle Front Photo"],["photo_chassis_no","2. Vehicle Chassis No. Photo"],["photo_chassis_plate","3. Vehicle Chassis Plate Photo"],
+const IN_PHOTOS = [["photo_front","1. Vehicle Front Photo"],["photo_chassis_no","2. Vehicle VIN No. Photo"],["photo_chassis_plate","3. Vehicle VIN Plate Photo"],
   ["photo_form22","4. FORM 22 Photo"],["photo_cng_cert","5. Vehicle CNG Certificate Photo"],["photo_cng_kit","6. Vehicle CNG Kit Photo"],
   ["photo_ecu","7. Vehicle ECU Photo"],["photo_right_side_qr","8. Vehicle Right Side QR Photo"]];
 const IN_SCANNED_FILES = new Map();

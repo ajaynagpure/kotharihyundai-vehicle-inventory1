@@ -76,7 +76,7 @@ async function renderGate(page){
   if(page === "register") return renderGateRegister();
   if(page === "gate-pass") return renderGatePass();
   const isBhilarwadi = page === "bhilarwadi";
-  const title = isBhilarwadi ? "Bhilarwadi In" : "Branch Vehicle In / Out";
+  const title = isBhilarwadi ? "bhilarwadi vehicle in" : "Vehicle In/ Out";
   const gateName = page === "bhilarwadi" ? "Bhilarwadi" : "Branch";
   state.gateSelectedVehicleId = null;
   const showDriver = gateName !== "Bhilarwadi";

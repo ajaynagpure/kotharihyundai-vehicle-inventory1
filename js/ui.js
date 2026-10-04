@@ -121,7 +121,7 @@ function loadZxing(){
  *  falls back to ZXing, and always offers "take a photo of the barcode". */
 async function openScanner(onResult, {captureImage = false} = {}){
   openModal(`<div class="modal-bg" id="scanBg"><div class="modal scan-modal" role="dialog" aria-modal="true" aria-label="Scan VIN">
-    <div class="panel-head"><h3>Scan VIN / Chassis barcode</h3><button class="icon-btn" type="button" id="scanClose" aria-label="Close">×</button></div>
+    <div class="panel-head"><h3>Scan VIN No. barcode</h3><button class="icon-btn" type="button" id="scanClose" aria-label="Close">×</button></div>
     <video id="scanVideo" playsinline muted autoplay></video><p id="scanMsg" class="form-help">Point the camera at the VIN barcode or QR code.</p>
     <div id="scanPrefixBox" style="display:none;margin:6px 0"><input id="scanPrefix" maxlength="11" placeholder="VIN पहिले 11 characters (e.g. MALPA813LTM)" style="width:100%;text-transform:uppercase"></div>
     <div class="form-actions"><label class="secondary-btn scan-photo">📷 Take / choose photo<input id="scanFile" type="file" accept="image/*" capture="environment" hidden></label>

@@ -24,9 +24,9 @@ const REPORTS = {
   "transit-report": {editable:true, title:"In Transit Report", source:"in_transit_report",
     cols:[col("Order No","order_no"), col("VIN No.","vin"), col("Engine No","engine_no"), col("Model","model"), col("Variant","variant"), col("Color","color"), col("Dealer","dealer_code"), col("Financier Name","finance_company"), col("HMI Invoice Date","hmi_invoice_date","date"), col("HMI Invoice No","hmi_invoice_no"), col("HMI Invoice Amount","hmi_invoice_amount","money")]},
   "arriving-report": {title:"Arriving Vehicles — OUT, awaiting IN", source:"awaiting_arrival_report", sort:["movement_time","desc"],
-    cols:[col("OUT Date","movement_time","datetime"), col("VIN / Vehicle No.","vin"), col("Model","model"), col("Stock Status","status"), col("IN Location","in_location"), col("OUT Location","out_location"), col("Gate","gate_name")]},
+    cols:[col("OUT Date","movement_time","datetime"), col("VIN No.","vin"), col("Model","model"), col("Last IN Location","in_location"), col("OUT Location","out_location"), col("Stock Status","vehicle_status"), col("Vehicle Movement Status","movement_status")]},
   "gate-report": {title:"Gate Movement Report", source:"gate_movement_report", sort:["movement_time","desc"],
-    cols:[col("Date & Time","movement_time","datetime"), col("Chassis No.","vin"), col("Model","model"), col("Type","movement_type"), col("From","from_location"), col("To","to_location"), col("Status","status")]}
+    cols:[col("Date & Time","movement_time","datetime"), col("VIN No.","vin"), col("Model","model"), col("Type","movement_type"), col("From","from_location"), col("To","to_location"), col("Status","status")]}
 };
 
 /* ---------------------------------------------------------------- Dashboard */
@@ -93,8 +93,8 @@ function renderDashboard(){
       <div id="modelDash" class="table-wrap dashboard-table">${emptyState("Loading...")}</div>
     </div>
     <div class="panel dashboard-movements-panel"><div class="panel-head"><h3>Recent Vehicle Movements</h3>${link("gate-report","View All")}</div><div id="gateTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
+    <div class="panel dashboard-extra-panel"><div class="panel-head"><h3>Delivered Model-wise and Location-wise</h3>${link("delivery-report","View Report")}</div><div id="deliveredModelChart" class="delivered-breakdown-chart">${emptyState("Loading...")}</div><div id="deliveredModelTotal" class="delivered-breakdown-total"></div><div id="deliveredModelLocation" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
     <div class="panel dashboard-arriving-panel"><div class="panel-head"><h3>Arriving Vehicles — OUT, awaiting IN</h3>${link("arriving-report","View All")}</div><div id="arrivingTable" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
-    <div class="panel dashboard-extra-panel"><div class="panel-head"><h3>Delivered by Model and Location</h3>${link("delivery-report","View Report")}</div><div id="deliveredModelLocation" class="table-wrap dashboard-table">${emptyState("Loading...")}</div></div>
   </div>
   </div>`;
   document.querySelectorAll(".stat-card-button").forEach(b => b.addEventListener("click", () => openStatModal(b.dataset.stat)));
@@ -149,7 +149,7 @@ async function loadDashboardData(){
     }
     locationSelect.dataset.ready = "true";
   }
-  const box = id => $(id), fail = msg => ["financeDash","dealerDash","locationTable","locationChart","modelStockDash","deliveredModelLocation","ageDash","modelDash","arrivingTable"].forEach(i => { if(box(i)) box(i).innerHTML = emptyState("Could not load: " + msg); });
+  const box = id => $(id), fail = msg => ["financeDash","dealerDash","locationTable","locationChart","modelStockDash","deliveredModelChart","deliveredModelLocation","ageDash","modelDash","arrivingTable"].forEach(i => { if(box(i)) box(i).innerHTML = emptyState("Could not load: " + msg); });
   if(dashboardAssignedLocation() === ""){
     fail("No assigned location is available for this user. Contact Admin.");
     ["stat0","stat1","stat2","stat3","stat4","stat5"].forEach(id => { if(box(id)) box(id).textContent = "—"; if(box(id + "v")) box(id + "v").textContent = "—"; });
@@ -247,13 +247,23 @@ async function loadDashboardData(){
     const deliveredGroups = new Map();
     all.filter(v => vStage(v) === "delivered").forEach(v => {
       const model = v.model || "Not Available", location = vLocName(v), key = JSON.stringify([model,location]);
-      const g = deliveredGroups.get(key) || {model, location, count:0, value:0};
+      const g = deliveredGroups.get(key) || {model,location,count:0,value:0};
       g.count++; g.value += vValue(v); deliveredGroups.set(key, g);
     });
-    const deliveredByModelLocation = [...deliveredGroups.values()].sort((a,b) => compareLocationNames(a.location,b.location) || a.model.localeCompare(b.model));
-    draw("deliveredModelLocation", ["Model","Location","Delivered","Purchase Value"], deliveredByModelLocation,
+    const deliveredByModelLocation = [...deliveredGroups.values()].sort((a,b) =>
+      b.count - a.count || compareLocationNames(a.location,b.location) || a.model.localeCompare(b.model));
+    const deliveredCount = deliveredByModelLocation.reduce((total,g) => total + g.count, 0);
+    const deliveredValue = deliveredByModelLocation.reduce((total,g) => total + g.value, 0);
+    const maxDeliveredCount = Math.max(1,...deliveredByModelLocation.map(g => g.count));
+    const maxDeliveredValue = Math.max(1,...deliveredByModelLocation.map(g => g.value));
+    if(box("deliveredModelChart")) box("deliveredModelChart").innerHTML = deliveredByModelLocation.length
+      ? `<div class="delivered-chart-legend"><span><i class="delivered-count-key"></i>Delivered vehicles</span><span><i class="delivered-value-key"></i>Purchase value</span></div><div class="delivered-chart-grid">${deliveredByModelLocation.map((g,index) => `<div class="delivered-chart-row" title="${esc(g.model)} · ${esc(g.location)}: ${g.count.toLocaleString("en-IN")} vehicles, ${esc(moneyShort(g.value))}"><span class="delivered-chart-rank">${String(index + 1).padStart(2,"0")}</span><span class="delivered-chart-label"><b>${esc(g.model)}</b><small>${esc(g.location)}</small></span><span class="delivered-chart-metric"><span><b>${g.count.toLocaleString("en-IN")}</b><small>vehicles</small></span><i><em class="delivered-count-bar" style="width:${Math.max(3,g.count/maxDeliveredCount*100)}%"></em></i></span><span class="delivered-chart-metric delivered-chart-value"><span><b>${esc(moneyShort(g.value))}</b><small>purchase value</small></span><i><em class="delivered-value-bar" style="width:${g.value > 0 ? Math.max(3,g.value/maxDeliveredValue*100) : 0}%"></em></i></span></div>`).join("")}</div>`
+      : emptyState("No delivered vehicles found.");
+    if(box("deliveredModelTotal")) box("deliveredModelTotal").innerHTML = deliveredByModelLocation.length
+      ? `<div class="delivered-total-card"><span>Delivered vehicles</span><b>${deliveredCount.toLocaleString("en-IN")}</b></div><div class="delivered-total-card delivered-total-value"><span>Total purchase value</span><b>${esc(moneyShort(deliveredValue))}</b></div>` : "";
+    draw("deliveredModelLocation", ["Model","Location","Delivered Count","Total Value"], deliveredByModelLocation,
       g => [g.model,g.location,g.count,moneyShort(g.value)],
-      gs => [B("Total"),"",N(gs.reduce((t,g) => t + g.count, 0)),MS(gs.reduce((t,g) => t + g.value, 0))]);
+      gs => [B("Grand Total"),"",N(deliveredCount),MS(deliveredValue)]);
 
     // Ageing = Free Stock only (In Transit, Tally Done, Pending Order and Delivered are not aged)
     const ageRows = ageInfo(all), names = ageBucketNames(), buckets = [...names, ...(ageRows.some(a => a.b === AGE_NODATE) ? [AGE_NODATE] : [])];
@@ -298,11 +308,14 @@ async function loadDashboardData(){
     }
   }
   const rows = Math.max(1, parseInt(state.settings?.sys?.dashboard_recent_rows, 10) || 8);
-  const f = dashboardFilters(), allMovements = gate.data || [], movements = allMovements.filter(r => {
-    const day = String(r.movement_time || "").slice(0,10), loc = r.to_location || r.from_location || "";
-    return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || loc === f.location);
+  const f = dashboardFilters(), allMovements = gate.data || [], movements = recentGateMovementRows(allMovements).filter(r => {
+    const day = String(r.movement_time || "").slice(0,10);
+    const locations = r.paired_out ? [r.paired_out.from_location, r.to_location] : [r.to_location, r.from_location];
+    return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || locations.includes(f.location));
   });
-  const arriving = awaitingArrivalRows(allMovements).filter(r => {
+  const awaitingRows = awaitingArrivalRows(allMovements);
+  const awaitingVins = new Set(awaitingRows.map(r => String(r.vin || r.chassis_no || r.vehicle_no || "").trim().toUpperCase().replace(/\s+/g, "")));
+  const arriving = awaitingRows.filter(r => {
     const day = String(r.movement_time || "").slice(0,10);
     return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || [r.in_location,r.out_location].includes(f.location));
   });
@@ -310,12 +323,17 @@ async function loadDashboardData(){
   if(box("stat7")) box("stat7").textContent = arriving.length.toLocaleString("en-IN");
   if(box("stat7v")) box("stat7v").textContent = moneyShort(arrivingValue);
   if(box("arrivingTable")) box("arrivingTable").innerHTML = arriving.length
-    ? table(REPORTS["arriving-report"].cols.map(c => c.h), arriving.map(r => [fmtDT(r.movement_time), r.vin || "-", r.model || "-", statusBadge(r.status), r.in_location, r.out_location, r.gate_name || "-"]))
+    ? table(REPORTS["arriving-report"].cols.map(c => c.h), [...arriving].sort((a,b) => (Date.parse(b.movement_time || "") || 0) - (Date.parse(a.movement_time || "") || 0)).slice(0,10).map(r => [fmtDT(r.movement_time), r.vin || "-", r.model || "-", r.in_location, r.out_location, statusBadge(r.vehicle_status || "-"), statusBadge(r.movement_status)]))
     : emptyState("No vehicles are awaiting arrival.");
   if(box("gateTable")) box("gateTable").innerHTML = gate.error ? emptyState("Could not load: " + (gate.error.message || gate.error)) :
-    table(["Date & Time","Chassis No.","Model","Type","From","To","Status"], movements.slice(0, rows).map(r => {
-      const statusText = r.status || (r.to_location ? "In Transit" : "-");
-      return [fmtDT(r.movement_time), r.vin || "-", r.model || "-", movementTypeBadge(r.movement_type), r.from_location || "-", r.to_location || "-", statusBadge(statusText)];
+    table(["Date & Time","VIN No.","Model","Type","From","To","Stock Status","Vehicle Movement Status"], movements.slice(0, rows).map(r => {
+      const vin = String(r.vin || r.chassis_no || r.vehicle_no || "").trim().toUpperCase().replace(/\s+/g, "");
+      const vehicleStatus = String(r.vehicle_status || "").trim();
+      const movementStatus = awaitingVins.has(vin) ? "Arriving" : String(r.movement_type || "").toUpperCase() || "-";
+      const movementType = r.paired_out
+        ? raw(`<span class="dashboard-movement-pair">${movementTypeBadge("OUT").html}<span aria-hidden="true">→</span>${movementTypeBadge("IN").html}</span>`)
+        : movementTypeBadge(r.movement_type);
+      return [fmtDT(r.movement_time), r.vin || "-", r.model || "-", movementType, r.paired_out?.from_location || r.from_location || "-", r.to_location || "-", statusBadge(vehicleStatus || "-"), statusBadge(movementStatus)];
     }));
 }
 
@@ -377,7 +395,7 @@ async function openStatModal(kind){
         return (!f.from || day >= f.from) && (!f.to || day <= f.to) && (!f.location || [r.in_location,r.out_location].includes(f.location));
       }).map(({id, ...row}) => row);
       openVehicleModal("Arriving Vehicles — OUT, awaiting IN", rows,
-        [col("OUT Date","movement_time","datetime"),col("VIN","vin"),col("Model","model"),col("Stock Status","status"),col("IN Location","in_location"),col("OUT Location","out_location"),col("Value","stock_value","money")],
+        [col("OUT Date","movement_time","datetime"),col("VIN No.","vin"),col("Model","model"),col("Last IN Location","in_location"),col("OUT Location","out_location"),col("Stock Status","vehicle_status"),col("Vehicle Movement Status","movement_status"),col("Value","stock_value","money")],
         "arriving", [], () => openStatModal("arriving"));
       return;
     }
@@ -454,13 +472,13 @@ async function renderVehicles(page){
   <div class="toolbar">
     <div class="searchbox${["search","vehicles"].includes(page) ? " vehicle-searchbox" : ""}">
       <input id="vehicleSearch" placeholder="Search VIN / order no / engine / model / color" autocomplete="off" aria-label="Search vehicles">
-      ${["search","vehicles"].includes(page) ? `<button type="button" id="vehicleScan" class="secondary-btn" title="Scan VIN / chassis barcode"><span class="vehicle-scan-icon" aria-hidden="true">📷</span><span>Scan</span></button>` : ""}
+      ${["search","vehicles"].includes(page) ? `<button type="button" id="vehicleScan" class="secondary-btn" title="Scan VIN barcode"><span class="vehicle-scan-icon" aria-hidden="true">📷</span><span>Scan</span></button>` : ""}
       <button type="button" id="vehicleSearchBtn">Search</button>
     </div>
     <div class="toolbar-actions">${useStatusButtons ? "" : filterBtn("vehFilter")}<button class="secondary-btn" type="button" id="vehicleExport">⤓ Export</button></div>
   </div>
   ${useStatusButtons ? `<div class="status-filter-bar" id="vehicleStatusButtons"><button type="button" class="tab-btn status-filter-btn active" data-status="">All status</button></div>` : filterPanel("vehFilter", `<div class="filter-grid"><label>Status<select id="vehicleStatus" aria-label="Filter by status"><option value="">All status</option></select></label></div>`)}
-  <div class="panel"><div class="table-wrap" id="vehicleResults">${emptyState(page === "search" ? "Enter a VIN / chassis / model to search." : "Loading vehicles...")}</div><div class="pager" id="vehiclePager"></div></div>
+  <div class="panel"><div class="table-wrap" id="vehicleResults">${emptyState(page === "search" ? "Enter a VIN No. / model to search." : "Loading vehicles...")}</div><div class="pager" id="vehiclePager"></div></div>
   <div id="modal"></div>`;
 
   const run = () => { VEH.q = cleanQuery($("vehicleSearch").value); if(!useStatusButtons) VEH.status = $("vehicleStatus").value; VEH.page = 0; queryVehicles(); };
@@ -681,7 +699,7 @@ function drawReport(){
   if(def.totals && rows.length) footer = def.cols.map((c,i) => i === 0 ? raw("<b>Total</b>") : (c.t === "num" || c.t === "money")
     ? raw(`<b>${fmtCell(c.t, rows.reduce((s,r) => s + Number(r[c.k] || 0), 0))}</b>`) : "");
   if(edit && footer) footer = [...footer, ""];
-  const cellOf = (c, r) => (def.dim && REPORT_STAGE[c.k] && Number(r[c.k]) > 0) ? dimNum(r[c.k], def.dim, r.key, REPORT_STAGE[c.k]) : c.k === "status" ? statusBadge(r[c.k]) : c.k === "movement_type" ? movementTypeBadge(r[c.k]) : fmtCell(c.t, r[c.k]);
+  const cellOf = (c, r) => (def.dim && REPORT_STAGE[c.k] && Number(r[c.k]) > 0) ? dimNum(r[c.k], def.dim, r.key, REPORT_STAGE[c.k]) : ["status","vehicle_status","movement_status"].includes(c.k) ? statusBadge(r[c.k]) : c.k === "movement_type" ? movementTypeBadge(r[c.k]) : fmtCell(c.t, r[c.k]);
   mountPaged($("reportTable"), {headers:[...def.cols.map(c => c.h), ...(edit ? [""] : [])],
     rows:rows.map(r => [...def.cols.map(c => cellOf(c, r)), ...(edit ? [raw(r.id || r.vehicle_id ? `<button type="button" class="table-icon-btn" data-redit="${esc(r.id || r.vehicle_id)}" title="Edit">✎ Edit</button>` : "")] : [])]), footer,
     onDraw:el => {

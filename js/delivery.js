@@ -61,19 +61,40 @@ async function renderDelivery(page){
   <p class="form-help">Enter the VIN and press <b>Fetch</b> (or Enter). Purchase details, Bhilarwadi IN date and Sales details are fetched from their reports. Enter the Delivery Date manually.</p>
   <form id="deliveryForm" class="form-grid">
     <div class="full"><label for="d_vin">VIN *</label><div class="searchbox" style="max-width:none"><input id="d_vin" name="vin" required autocomplete="off" placeholder="VIN or last 6 digits"><button type="button" id="d_fetch">Fetch</button></div><div id="d_info" class="form-help"></div></div>
-    ${DEL_ENTRY_FIELDS.filter(([k]) => k !== "vin").map(([k,label,source,type]) => `<div><label for="d_${k}">${esc(label)}${source ? ` <small style="font-weight:400;color:#98a2b3">(${esc(source)})</small>` : ""}</label><input id="d_${k}" name="${k}" type="${type === "date" ? "date" : "text"}" ${source === "manual" ? "" : "readonly"} ${k === "delivery_date" ? `value="${todayLocal()}"` : ""}></div>`).join("")}
-    <div class="full form-actions"><button class="primary-btn" type="submit">Complete Delivery</button></div></form></div>`;
+    ${DEL_ENTRY_FIELDS.filter(([k]) => k !== "vin").map(([k,label,source,type]) => `<div><label for="d_${k}">${esc(DELIVERY_COLUMN_LABELS[k] || label)}${source ? ` <small style="font-weight:400;color:#98a2b3">(${esc(source)})</small>` : ""}</label><input id="d_${k}" name="${k}" type="${type === "date" ? "date" : "text"}" ${source === "manual" ? "" : "readonly"} ${k === "delivery_date" ? `value="${todayLocal()}"` : ""}></div>`).join("")}
+    <div class="full form-actions"><button class="primary-btn" type="submit" disabled>Complete Delivery</button></div></form></div>`;
   $("deliveryForm").addEventListener("submit", saveDelivery);
   $("d_fetch").addEventListener("click", delFetchInto);
+  $("d_vin").addEventListener("input", () => {
+    if(DEL.vehicle && delVin($("d_vin").value) !== delVin(DEL.vehicle.vin)){
+      DEL.vehicle = null;
+      $("deliveryForm").querySelector('button[type="submit"]').disabled = true;
+      $("d_info").textContent = "Fetch this VIN to verify that Tally is complete before entering delivery.";
+      $("d_info").style.color = "#b54708";
+    }
+  });
   $("d_vin").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); delFetchInto(); } });
   $("d_vin").addEventListener("change", delFetchInto);
 }
 async function delFetchInto(){
-  const info = $("d_info"); if(!info || !state.supabase) return;
-  if(!delVin($("d_vin").value)) return;
+  const info = $("d_info"); if(!info) return;
+  const submit = $("deliveryForm")?.querySelector('button[type="submit"]');
+  if(submit) submit.disabled = true;
+  DEL.vehicle = null;
+  if(!state.supabase){ info.textContent = "Delivery eligibility could not be checked: Supabase is not connected."; info.style.color = "#b42318"; return; }
+  if(!delVin($("d_vin").value)){ info.textContent = "Enter a VIN and select Fetch to check Tally status."; info.style.color = "#b54708"; return; }
   const r = await delFindVehicle($("d_vin").value);
   if(r.error){ DEL.vehicle = null; info.textContent = r.error + " You can still type the details manually only after the VIN exists in stock."; info.style.color = "#b42318"; return; }
-  const v = r.v; DEL.vehicle = v; $("d_vin").value = v.vin;
+  const v = r.v; $("d_vin").value = v.vin;
+  if(vStage(v) !== "bill"){
+    const currentStatus = String(v.status || "Unknown").trim();
+    info.textContent = vStage(v) === "delivered"
+      ? `Delivery blocked: this vehicle is already Delivered (current status: ${currentStatus}).`
+      : `Delivery blocked: Tally Done is incomplete (current status: ${currentStatus}). Complete/import the Sales (Tally) entry for this VIN before Delivery Entry.`;
+    info.style.color = "#b42318";
+    return;
+  }
+  DEL.vehicle = v;
   const inMovement = await state.supabase.from("gate_movements").select("receipt_dt,created_at").eq("vin", v.vin).eq("gate_name", "Bhilarwadi").eq("movement_type", "IN").order("created_at", {ascending:false}).limit(1).maybeSingle();
   const values = {...v,
     bhilarwadi_in_date:inMovement.data?.receipt_dt || inMovement.data?.created_at || "",
@@ -87,7 +108,8 @@ async function delFetchInto(){
   });
   const purchase = !isBlank(v.hmi_invoice_no) || !isBlank(v.engine_no), sales = !isBlank(v.bill_no) || !isBlank(v.sales_imported_at);
   info.style.color = vStage(v) === "delivered" ? "#b42318" : "#027a48";
-  info.textContent = `Status: ${v.status || "-"} · Purchase data: ${purchase ? "found" : "not found (type manually)"} · Sales data: ${sales ? "found" : "not found (type manually)"}` + (vStage(v) === "delivered" ? " · Already delivered — saving again will update it." : "");
+  if(submit) submit.disabled = false;
+  info.textContent = `Eligible for delivery · Status: ${v.status || "-"} · Purchase data: ${purchase ? "found" : "not found"} · Sales/Tally data: ${sales ? "found" : "not found"}.`;
 }
 /** Fields that go on the vehicle record. clear=true lets an empty box erase the value (edit). */
 function delVehiclePatch(f, clear){
@@ -103,12 +125,19 @@ const delRowPayload = (f, vehicleId) => { const p = {vehicle_id:vehicleId}; ["de
 async function saveDelivery(e){
   e.preventDefault();
   if(!state.supabase){ toast("Connect Supabase first.","error"); return; }
-  const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+  const btn = e.target.querySelector("button[type=submit]"); let canSubmit = false; btn.disabled = true;
   try {
     const f = {}; for(const [k, v] of new FormData(e.target).entries()) f[k] = delClean(v);
     const r = await delFindVehicle(f.vin); if(r.error){ toast(r.error,"error"); return; }
     const v = r.v;
-    if(vStage(v) !== "bill"){ toast("Not in Tally Done. Delivery cannot be completed.", "error"); return; }
+    if(vStage(v) !== "bill"){
+      const currentStatus = String(v.status || "Unknown").trim();
+      toast(vStage(v) === "delivered"
+        ? `Delivery blocked: this vehicle is already Delivered (current status: ${currentStatus}).`
+        : `Delivery blocked: Tally Done is incomplete (current status: ${currentStatus}). Complete/import the Sales (Tally) entry for this VIN first.`, "error");
+      return;
+    }
+    canSubmit = true;
     if(!f.delivery_date) f.delivery_date = todayLocal();
     importDropped.clear();
     let ins = await importWrite(b => state.supabase.from("deliveries").insert(b), delRowPayload(f, v.id));
@@ -119,10 +148,10 @@ async function saveDelivery(e){
     if(up.error || !up.data?.length){ toast("Delivery saved, but vehicle status was not updated: " + (up.error?.message || "no permission"), "error"); return; }
     VCACHE.rows = null; logAudit("DELIVERY","delivery","vehicles",v.id,{vin:v.vin});
     const skipped = [...importDropped]; 
-    e.target.reset(); e.target.delivery_date.value = todayLocal(); DEL.vehicle = null; $("d_info").textContent = "";
+    e.target.reset(); e.target.delivery_date.value = todayLocal(); DEL.vehicle = null; $("d_info").textContent = ""; canSubmit = false;
     $("d_delivery_location").innerHTML = delLocOptions("");
     toast(skipped.length ? `Delivery completed. Not saved (run DELIVERY_ENTRY.sql): ${skipped.join(", ")}` : "Delivery completed.", skipped.length ? "error" : "success");
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = !canSubmit; }
 }
 
 /* ---------------------------------------------------------------- Delivered Vehicles / Delivery History */
@@ -227,7 +256,7 @@ async function deleteDeliveryRecord(v){
   const sb = state.supabase; importDropped.clear();
   const d = await sb.from("deliveries").delete().eq("vehicle_id", v.id).select("vehicle_id");
   if(d.error) return {error:d.error.message};
-  const up = await importWrite(b => sb.from("vehicles").update(b).eq("id", v.id).select("id"), {status:back, delivery_date:null, delivery_location:null});
+  const up = await importWrite(b => sb.from("vehicles").update(b).eq("id", v.id).select("id"), {status:back, delivery_no:null, delivery_date:null, delivery_location:null});
   if(up.error || !up.data?.length) return {error:up.error?.message || "Not changed — no permission to edit / delete."};
   VCACHE.rows = null; logAudit("DELETE_DELIVERY","delivery","vehicles",v.id,{vin:v.vin, back});
   return {back};
